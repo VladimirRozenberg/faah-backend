@@ -1,9 +1,18 @@
 from fastapi import FastAPI
 from sqlalchemy import text, select
 
+from routers import assets, health
+
 from db import DbSession
 
-app = FastAPI()
+app = FastAPI(
+    title="FAAH API",
+    description="API backend de l'application FAAH",
+    version="0.1.0",
+)
+
+app.include_router(health.router)
+app.include_router(assets.router)
 
 
 @app.get("/test-db")
