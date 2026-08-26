@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from sqlalchemy import text, select
 
 from routers import assets, health
-import prompts
+import prompt.prompts as prompts
 from db import DbSession
 
 app = FastAPI(

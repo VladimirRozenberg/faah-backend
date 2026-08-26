@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Query
 
-from services.market_data import (
+from market_data import (
     ALLOWED_PERIOD_INTERVALS,
     InvalidHistoryRequestError,
     MarketDataUnavailableError,

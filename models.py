@@ -1,9 +1,8 @@
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
-    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -13,6 +12,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db import Base
@@ -25,18 +25,24 @@ from db import Base
 class User(Base):
     __tablename__ = "users"
 
-    usr_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    usr_id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
 
     usr_username: Mapped[str] = mapped_column(
         String,
         unique=True,
         nullable=False,
     )
+
     usr_email: Mapped[str] = mapped_column(
         String,
         unique=True,
         nullable=False,
     )
+
     usr_password_hash: Mapped[str] = mapped_column(
         String,
         nullable=False,
@@ -48,6 +54,7 @@ class User(Base):
         server_default="true",
         nullable=False,
     )
+
     usr_created_at: Mapped[datetime] = mapped_column(
         DateTime,
         server_default=func.now(),
@@ -62,17 +69,23 @@ class User(Base):
 class Asset(Base):
     __tablename__ = "assets"
 
-    ast_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ast_id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
 
     ast_symbol: Mapped[str] = mapped_column(
         String,
         unique=True,
         nullable=False,
     )
+
     ast_name: Mapped[str] = mapped_column(
         String,
         nullable=False,
     )
+
     ast_type: Mapped[str] = mapped_column(
         String,
         nullable=False,
@@ -84,7 +97,32 @@ class Asset(Base):
         server_default="true",
         nullable=False,
     )
+
     ast_created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
+# ============================================================
+# FAVORITES
+# ============================================================
+
+class Favorite(Base):
+    __tablename__ = "favorites"
+
+    fav_usr_id: Mapped[int] = mapped_column(
+        ForeignKey("users.usr_id"),
+        primary_key=True,
+    )
+
+    fav_ast_id: Mapped[int] = mapped_column(
+        ForeignKey("assets.ast_id"),
+        primary_key=True,
+    )
+
+    fav_created_at: Mapped[datetime] = mapped_column(
         DateTime,
         server_default=func.now(),
         nullable=False,
@@ -107,7 +145,9 @@ class Stock(Base):
         String,
         nullable=False,
     )
+
     sto_sector: Mapped[str | None] = mapped_column(String)
+
     sto_industry: Mapped[str | None] = mapped_column(String)
 
 
@@ -124,6 +164,7 @@ class Crypto(Base):
     )
 
     cry_blockchain: Mapped[str | None] = mapped_column(String)
+
     cry_contract_address: Mapped[str | None] = mapped_column(String)
 
 
@@ -143,6 +184,7 @@ class Forex(Base):
         String,
         nullable=False,
     )
+
     for_quote_currency: Mapped[str] = mapped_column(
         String,
         nullable=False,
@@ -169,36 +211,17 @@ class Commodity(Base):
 
 
 # ============================================================
-# FAVORITES
-# ============================================================
-
-class Favorite(Base):
-    __tablename__ = "favorites"
-
-    fav_usr_id: Mapped[int] = mapped_column(
-        ForeignKey("users.usr_id"),
-        primary_key=True,
-    )
-    fav_ast_id: Mapped[int] = mapped_column(
-        ForeignKey("assets.ast_id"),
-        primary_key=True,
-    )
-
-    fav_created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        server_default=func.now(),
-        nullable=False,
-    )
-
-
-# ============================================================
 # PORTFOLIOS
 # ============================================================
 
 class Portfolio(Base):
     __tablename__ = "portfolios"
 
-    prt_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    prt_id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
 
     prt_usr_id: Mapped[int] = mapped_column(
         ForeignKey("users.usr_id"),
@@ -209,43 +232,39 @@ class Portfolio(Base):
         String,
         nullable=False,
     )
+
     prt_description: Mapped[str | None] = mapped_column(Text)
 
     prt_strategy_type: Mapped[str | None] = mapped_column(String)
 
-    prt_risk_tolerance: Mapped[str] = mapped_column(
+    prt_risk_tolerance: Mapped[str | None] = mapped_column(
         String,
         default="medium",
         server_default="medium",
-        nullable=False,
     )
 
-    prt_max_position_size_pct: Mapped[Decimal] = mapped_column(
+    prt_max_position_size_pct: Mapped[Decimal | None] = mapped_column(
         Numeric(5, 2),
         default=Decimal("5.00"),
         server_default="5.00",
-        nullable=False,
     )
 
-    prt_max_open_positions: Mapped[int] = mapped_column(
+    prt_max_open_positions: Mapped[int | None] = mapped_column(
         Integer,
         default=10,
         server_default="10",
-        nullable=False,
     )
 
-    prt_base_currency: Mapped[str] = mapped_column(
+    prt_base_currency: Mapped[str | None] = mapped_column(
         String,
         default="USD",
         server_default="USD",
-        nullable=False,
     )
 
-    prt_is_active: Mapped[bool] = mapped_column(
+    prt_is_active: Mapped[bool | None] = mapped_column(
         Boolean,
         default=True,
         server_default="true",
-        nullable=False,
     )
 
     prt_created_at: Mapped[datetime] = mapped_column(
@@ -257,7 +276,6 @@ class Portfolio(Base):
     prt_updated_at: Mapped[datetime] = mapped_column(
         DateTime,
         server_default=func.now(),
-        onupdate=func.now(),
         nullable=False,
     )
 
@@ -294,132 +312,54 @@ class PortfolioAsset(Base):
 
 
 # ============================================================
-# BOTS
+# PROMPTS
 # ============================================================
 
-class Bot(Base):
-    __tablename__ = "bots"
+class Prompt(Base):
+    __tablename__ = "prompts"
 
-    bot_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    prm_id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
 
-    bot_name: Mapped[str] = mapped_column(
+    prm_name: Mapped[str] = mapped_column(
         String,
         nullable=False,
     )
-    bot_description: Mapped[str | None] = mapped_column(Text)
 
-    bot_prompt_template: Mapped[str] = mapped_column(
+    prm_type: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+    )
+
+    prm_version: Mapped[int | None] = mapped_column(
+        Integer,
+        default=1,
+        server_default="1",
+    )
+
+    prm_prompt_text: Mapped[str] = mapped_column(
         Text,
         nullable=False,
     )
 
-    bot_is_active: Mapped[bool] = mapped_column(
+    prm_is_active: Mapped[bool | None] = mapped_column(
         Boolean,
         default=True,
         server_default="true",
-        nullable=False,
     )
 
-    bot_created_at: Mapped[datetime] = mapped_column(
+    prm_created_at: Mapped[datetime] = mapped_column(
         DateTime,
         server_default=func.now(),
         nullable=False,
     )
 
-    bot_updated_at: Mapped[datetime] = mapped_column(
+    prm_updated_at: Mapped[datetime] = mapped_column(
         DateTime,
         server_default=func.now(),
-        onupdate=func.now(),
-        nullable=False,
-    )
-
-
-# ============================================================
-# TRADING BOTS
-# ============================================================
-
-class TradingBot(Base):
-    __tablename__ = "trading_bots"
-
-    trd_bot_id: Mapped[int] = mapped_column(
-        ForeignKey("bots.bot_id"),
-        primary_key=True,
-    )
-
-
-# ============================================================
-# SENTIMENT BOTS
-# ============================================================
-
-class SentimentBot(Base):
-    __tablename__ = "sentiment_bots"
-
-    sen_bot_id: Mapped[int] = mapped_column(
-        ForeignKey("bots.bot_id"),
-        primary_key=True,
-    )
-
-
-# ============================================================
-# ARBITRAGE BOTS
-# ============================================================
-
-class ArbitrageBot(Base):
-    __tablename__ = "arbitrage_bots"
-
-    arb_bot_id: Mapped[int] = mapped_column(
-        ForeignKey("bots.bot_id"),
-        primary_key=True,
-    )
-
-
-# ============================================================
-# RISK BOTS
-# ============================================================
-
-class RiskBot(Base):
-    __tablename__ = "risk_bots"
-
-    rsk_bot_id: Mapped[int] = mapped_column(
-        ForeignKey("bots.bot_id"),
-        primary_key=True,
-    )
-
-
-# ============================================================
-# BOT PARAMETERS
-# ============================================================
-
-class BotParameter(Base):
-    __tablename__ = "bot_parameters"
-
-    par_bot_id: Mapped[int] = mapped_column(
-        ForeignKey("bots.bot_id"),
-        primary_key=True,
-    )
-
-    par_name: Mapped[str] = mapped_column(
-        String,
-        primary_key=True,
-    )
-
-    par_value: Mapped[str | None] = mapped_column(Text)
-
-    par_type: Mapped[str] = mapped_column(
-        String,
-        nullable=False,
-    )
-
-    par_created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        server_default=func.now(),
-        nullable=False,
-    )
-
-    par_updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        server_default=func.now(),
-        onupdate=func.now(),
         nullable=False,
     )
 
@@ -440,7 +380,11 @@ class MarketData(Base):
         ),
     )
 
-    mkt_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    mkt_id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
 
     mkt_ast_id: Mapped[int] = mapped_column(
         ForeignKey("assets.ast_id"),
@@ -491,16 +435,22 @@ class MarketData(Base):
 class DataSource(Base):
     __tablename__ = "data_sources"
 
-    src_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    src_id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
 
     src_type: Mapped[str] = mapped_column(
         String,
         nullable=False,
     )
 
-    src_url: Mapped[str | None] = mapped_column(String)
     src_title: Mapped[str | None] = mapped_column(Text)
     src_content: Mapped[str | None] = mapped_column(Text)
+    src_original_url: Mapped[str | None] = mapped_column(String)
+
+    src_storage_path: Mapped[str | None] = mapped_column(String)
 
     src_published_at: Mapped[datetime | None] = mapped_column(DateTime)
 
@@ -519,145 +469,32 @@ class DataSource(Base):
 
 
 # ============================================================
-# NEWS ARTICLES
-# ============================================================
-
-class NewsArticle(Base):
-    __tablename__ = "news_articles"
-
-    new_src_id: Mapped[int] = mapped_column(
-        ForeignKey("data_sources.src_id"),
-        primary_key=True,
-    )
-
-    new_source: Mapped[str | None] = mapped_column(String)
-    new_author: Mapped[str | None] = mapped_column(String)
-    new_summary: Mapped[str | None] = mapped_column(Text)
-
-
-# ============================================================
-# TWEETS
-# ============================================================
-
-class Tweet(Base):
-    __tablename__ = "tweets"
-
-    twe_src_id: Mapped[int] = mapped_column(
-        ForeignKey("data_sources.src_id"),
-        primary_key=True,
-    )
-
-    twe_tweet_id: Mapped[str] = mapped_column(
-        String,
-        unique=True,
-        nullable=False,
-    )
-
-    twe_username: Mapped[str] = mapped_column(
-        String,
-        nullable=False,
-    )
-
-    twe_verified: Mapped[bool] = mapped_column(
-        Boolean,
-        default=False,
-        server_default="false",
-        nullable=False,
-    )
-
-    twe_retweet_count: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        server_default="0",
-        nullable=False,
-    )
-
-    twe_like_count: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        server_default="0",
-        nullable=False,
-    )
-
-
-# ============================================================
-# REPORTS
-# ============================================================
-
-class Report(Base):
-    __tablename__ = "reports"
-
-    rep_src_id: Mapped[int] = mapped_column(
-        ForeignKey("data_sources.src_id"),
-        primary_key=True,
-    )
-
-    rep_type: Mapped[str] = mapped_column(
-        String,
-        nullable=False,
-    )
-
-    rep_publisher: Mapped[str] = mapped_column(
-        String,
-        nullable=False,
-    )
-
-    rep_industry: Mapped[str | None] = mapped_column(String)
-    rep_company_name: Mapped[str | None] = mapped_column(String)
-
-    rep_period_start: Mapped[date | None] = mapped_column(Date)
-    rep_period_end: Mapped[date | None] = mapped_column(Date)
-
-    rep_report_date: Mapped[date | None] = mapped_column(Date)
-
-
-# ============================================================
-# ON-CHAIN DATA
-# ============================================================
-
-class OnchainData(Base):
-    __tablename__ = "onchain_data"
-
-    onc_src_id: Mapped[int] = mapped_column(
-        ForeignKey("data_sources.src_id"),
-        primary_key=True,
-    )
-
-    onc_blockchain: Mapped[str] = mapped_column(
-        String,
-        nullable=False,
-    )
-
-    onc_tx_hash: Mapped[str] = mapped_column(
-        String,
-        unique=True,
-        nullable=False,
-    )
-
-    onc_from_address: Mapped[str | None] = mapped_column(String)
-    onc_to_address: Mapped[str | None] = mapped_column(String)
-
-    onc_value: Mapped[Decimal | None] = mapped_column(
-        Numeric(30, 0)
-    )
-
-
-# ============================================================
 # SOURCE CLASSIFICATIONS
 # ============================================================
 
 class SourceClassification(Base):
     __tablename__ = "source_classifications"
 
-    cls_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cls_id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
 
     cls_src_id: Mapped[int] = mapped_column(
         ForeignKey("data_sources.src_id"),
         nullable=False,
     )
 
+    cls_prm_id: Mapped[int] = mapped_column(
+        ForeignKey("prompts.prm_id"),
+        nullable=False,
+    )
+
     cls_category: Mapped[str | None] = mapped_column(String)
+
     cls_importance: Mapped[str | None] = mapped_column(String)
+
     cls_sentiment: Mapped[str | None] = mapped_column(String)
 
     cls_should_trigger: Mapped[bool] = mapped_column(
@@ -694,6 +531,7 @@ class ClassificationAsset(Base):
     )
 
     cla_relevance_confidence: Mapped[int | None] = mapped_column(Integer)
+
     cla_reason: Mapped[str | None] = mapped_column(Text)
 
 
@@ -704,10 +542,14 @@ class ClassificationAsset(Base):
 class Analysis(Base):
     __tablename__ = "analyses"
 
-    anl_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    anl_id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
 
-    anl_bot_id: Mapped[int] = mapped_column(
-        ForeignKey("bots.bot_id"),
+    anl_prm_id: Mapped[int] = mapped_column(
+        ForeignKey("prompts.prm_id"),
         nullable=False,
     )
 
@@ -726,11 +568,6 @@ class Analysis(Base):
 
     anl_trigger_reason: Mapped[str | None] = mapped_column(Text)
 
-    anl_prompt_text: Mapped[str] = mapped_column(
-        Text,
-        nullable=False,
-    )
-
     anl_response_text: Mapped[str] = mapped_column(
         Text,
         nullable=False,
@@ -739,9 +576,11 @@ class Analysis(Base):
     anl_summary: Mapped[str | None] = mapped_column(Text)
 
     anl_direction: Mapped[str | None] = mapped_column(String)
+
     anl_market_sentiment: Mapped[str | None] = mapped_column(String)
 
     anl_confidence: Mapped[int | None] = mapped_column(Integer)
+
     anl_risk_level: Mapped[str | None] = mapped_column(String)
 
     anl_timeframe: Mapped[str | None] = mapped_column(String)
@@ -796,7 +635,11 @@ class AnalysisInput(Base):
 class Signal(Base):
     __tablename__ = "signals"
 
-    sig_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sig_id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
 
     sig_anl_id: Mapped[int] = mapped_column(
         ForeignKey("analyses.anl_id"),
@@ -830,13 +673,13 @@ class Signal(Base):
     )
 
     sig_confidence: Mapped[int | None] = mapped_column(Integer)
+
     sig_timeframe: Mapped[str | None] = mapped_column(String)
 
-    sig_status: Mapped[str] = mapped_column(
+    sig_status: Mapped[str | None] = mapped_column(
         String,
         default="active",
         server_default="active",
-        nullable=False,
     )
 
     sig_expires_at: Mapped[datetime | None] = mapped_column(DateTime)

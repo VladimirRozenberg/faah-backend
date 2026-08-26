@@ -1,23 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException,status
+import db
 from sqlalchemy import select
 
 import json
 
-from models import DataSource
+from models import DataSource, Prompt, SourceClassification
 from db import DbSession
 from openai import AsyncOpenAI
-router = APIRouter()
+
 
 client=AsyncOpenAI(
     api_key="sk-ad460ae7b7ae4bcfbd1e637eb33c5771",
     base_url="https://api.deepseek.com"
     )
-
-
-@router.get("/classify/{source_id}")
-async def classify_source_endpoint(source_id: int, db: DbSession = Depends()):
-    classification = await classify_source(source_id, db)
-    return classification
 
 
 async def classify_source(source_id: int, db: DbSession):
@@ -29,7 +23,19 @@ async def classify_source(source_id: int, db: DbSession):
             detail="Source not found",
         )
 
-    prompt = generate_classification_prompt(source)
+
+    prompt_text = generate_classification_prompt(source)
+
+# Record exactly what was sent to the LLM
+    db_prompt = Prompt(
+        prm_name="Source classification",
+        prm_type="classification",
+        prm_version=1,
+        prm_prompt_text=prompt_text,
+    )
+
+    db.add(db_prompt)
+    await db.flush()
 
     response = await client.chat.completions.create(
         model="deepseek-v4-flash",
@@ -40,7 +46,7 @@ async def classify_source(source_id: int, db: DbSession):
             },
             {
                 "role": "user",
-                "content": prompt,
+                "content": prompt_text,
             },
         ],
         max_tokens=300,
@@ -55,9 +61,26 @@ async def classify_source(source_id: int, db: DbSession):
 
     classification = json.loads(content)
 
+    db_classification = SourceClassification(
+        cls_src_id=source_id,
+        cls_prm_id=db_prompt.prm_id,
+        cls_category=classification["cls_category"],
+        cls_importance=classification["cls_importance"],
+        cls_sentiment=classification["cls_sentiment"],
+        cls_should_trigger=classification["cls_should_trigger"],
+        cls_reason=classification["cls_reason"],
+    )
 
+    # Stage INSERT
+    db.add(db_classification)
 
-    return classification
+    # Execute transaction
+    await db.commit()
+
+    # Reload generated values such as cls_id and cls_created_at
+    await db.refresh(db_classification)
+
+    return db_classification
 
 
 def generate_classification_prompt(source: DataSource) -> str:
