@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from sqlalchemy import text, select
 
 from routers import assets, health
-
+import prompts
 from db import DbSession
 
 app = FastAPI(
@@ -13,6 +13,8 @@ app = FastAPI(
 
 app.include_router(health.router)
 app.include_router(assets.router)
+app.include_router(prompts.router, prefix="/prompt")
+
 
 
 @app.get("/test-db")
