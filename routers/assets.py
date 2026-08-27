@@ -14,7 +14,11 @@ from schemas import (
     AssetListResponse,
     AssetSummary,
     CandleResponse,
+    StockSyncResponse,
 )
+
+from db import DbSession
+from stock_repository import sync_stocks
 
 
 # Toutes les routes de ce fichier commencent par /api et sont regroupées
@@ -84,3 +88,20 @@ def history_options() -> dict[str, list[str]]:
         for period, intervals in ALLOWED_PERIOD_INTERVALS.items()
     }
 
+@router.post(
+    "/assets/stocks/sync",
+    response_model=StockSyncResponse,
+)
+async def synchronize_stocks(
+    db: DbSession,
+) -> StockSyncResponse:
+    """Enregistre les actions dans assets et stocks."""
+
+    result = await sync_stocks(db)
+
+    return StockSyncResponse(
+        created=result["created"],
+        updated=result["updated"],
+        unchanged=result["unchanged"],
+        total=result["total"],
+    )

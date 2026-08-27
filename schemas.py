@@ -54,3 +54,11 @@ class CandleResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = Field(examples=["ok"])
 
+
+class StockSyncResponse(BaseModel):
+    """Résultat de la synchronisation des actions."""
+
+    created: int
+    updated: int
+    unchanged: int
+    total: int
