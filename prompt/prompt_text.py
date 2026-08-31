@@ -37,27 +37,32 @@ async def classify_source(source_id: int, db: DbSession):
     db.add(db_prompt)
     await db.flush()
 
-    response = await client.chat.completions.create(
+    response = await client.responses.create(
         model="deepseek-v4-flash",
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a financial information classifier.",
-            },
-            {
-                "role": "user",
-                "content": prompt_text,
-            },
-        ],
-        max_tokens=300,
-        extra_body={
-            "thinking": {
-                "type": "disabled",
-            }
-        },
-    )
+        instructions="You are a financial information classifier.",
+        input=prompt_text,
+        max_output_tokens=4000,
+        reasoning={
+            "effort": "none",},
+    tools=[
+        {
+            "type": "web_search",
+        }
+    ],
+    text={
+        "format": {
+            "type": "json_object"
+        }
+    },
+)
+    content = response.output_text
 
-    content = response.choices[0].message.content
+    print("RAW DEEPSEEK CONTENT:", repr(content))
+
+    if not content:
+        print(response.model_dump_json(indent=2))
+        raise RuntimeError("DeepSeek returned empty output")
+
 
     classification = json.loads(content)
 
@@ -103,6 +108,7 @@ IMPORTANT:
   lawsuits, demand changes, supply disruptions, geopolitical events,
   technological developments, and similar events may be financially relevant
   even when stock prices or investing are never explicitly mentioned.
+- Do not assume that the information is necessarily true or accurate if information is unverified use websearch to verify.
 
 Return ONLY valid JSON using EXACTLY this structure:
 
@@ -110,8 +116,9 @@ Return ONLY valid JSON using EXACTLY this structure:
     "cls_category": "string",
     "cls_importance": "low | medium | high",
     "cls_sentiment": "negative | neutral | positive",
-    "cls_should_trigger": true,
-    "cls_reason": "short explanation"
+    "cls_reason": "short explanation",
+    "cls_should_trigger": true
+    
 }}
 
 Field definitions:
@@ -132,14 +139,19 @@ The likely directional implication of the information:
 - neutral
 - negative
 
-cls_should_trigger:
-Set to true when the information is significant enough that another
-analysis process should investigate its potential financial impact. In case of some dubious news,
-some very wild unverified claims you should set it to false in order to avoid unnecessary analysis.
 
 cls_reason:
 Briefly explain why you chose the classification and whether the
-information could matter financially.
+information could matter financially. Here you should use web search to verify the information and provide a short explanation of your reasoning. Also VERY IMPORTAN!!! include a short sentence if u used web search or not.
+
+cls_should_trigger:
+Set to true ONLY when BOTH of the following conditions are satisfied:
+
+The information is sufficiently credible.
+The information is financially significant enough to justify deeper analysis.
+
+If the source appears fabricated, generic, misleading, materially incomplete, or cannot be reasonably verified despite searching for a supposedly real and recent event, set cls_should_trigger to false.
+
 
 Do not add additional JSON fields.
 Do not include markdown.
@@ -158,6 +170,8 @@ CONTENT:
 
 PUBLISHED AT:
 {source.src_published_at}
+
+
 """
 
 
@@ -207,35 +221,36 @@ async def analyze_source(
     db.add(db_prompt)
     await db.flush()
 
-    response = await client.chat.completions.create(
-    model="deepseek-v4-flash",
-    messages=[
-        {
-            "role": "system",
-            "content": (
-                "You are a financial analyst performing detailed "
-                "financial analysis of financially significant information."
-            ),
+    response = await client.responses.create(
+        model="deepseek-v4-flash",
+
+        instructions=(
+            "You are a financial analyst performing detailed "
+            "financial analysis of financially significant information."
+        ),
+
+        input=prompt_text,
+
+        max_output_tokens=12000,
+
+        reasoning={
+            "effort": "high",
         },
-        {
-            "role": "user",
-            "content": prompt_text,
+
+        text={
+            "format": {
+                "type": "json_object",
+            }
         },
-    ],
-    max_tokens=4000,
 
+        tools=[
+            {
+                "type": "web_search",
+            }
+        ],
+    )
 
-extra_body={
-    "thinking": {
-        "type": "enabled",
-    },
-    "response_format": {
-        "type": "json_object",
-    },
-}
-)
-
-    content = response.choices[0].message.content
+    content = response.output_text
 
     analysis = json.loads(content)
 
@@ -309,6 +324,8 @@ Determine:
 
 IMPORTANT:
 - Base the analysis primarily on the supplied source.
+- Use web search to verify the information from the URL given (if given)
+- If u cant access the URL try to verify it using other web sources and when making your analysis include a short sentence if u used web search or not and what sources it corresponded to from the web search -Give url and title.
 - Do not invent facts, prices, financial figures, company exposures, market
   reactions, or events that are not supported by the provided information.
 - Reasonable financial inference is allowed when the connection is clearly
@@ -353,6 +370,11 @@ positive and negative implications, uncertainties, and the likely timeframe.
 
 It should focus on interpretation and financial consequences rather than
 simply repeating the source.
+
+!! important list the urls and titles of any sources you used to verify the information in the source. If you did not use web search to verify the information, include a short sentence explaining why.
+and whether they should be used for wider analysis or not. 
+
+always include a short sentence if you used web search or not
 
 anl_summary:
 A concise summary of the most important conclusion from the analysis.
@@ -449,4 +471,6 @@ CONTENT:
 
 PUBLISHED AT:
 {source.src_published_at}
+
+
 """
