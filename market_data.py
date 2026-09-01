@@ -27,6 +27,7 @@ TECH_STOCKS: dict[str, dict[str, str]] = {
     "AVGO": {"name": "Broadcom", "exchange": "NASDAQ"},
     "ORCL": {"name": "Oracle", "exchange": "NYSE"},
     "AMD": {"name": "AMD", "exchange": "NASDAQ"},
+    "PYPL": {"name": "Paypal", "exchange": "NASDAQ"},
 }
 
 

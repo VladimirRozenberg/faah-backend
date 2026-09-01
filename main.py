@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from sqlalchemy import text, select
 
-from routers import assets, health
+from routers import assets, health, live_market
 import prompt.prompts as prompts
 from prompt import prompt_text
 from db import DbSession
@@ -19,6 +19,7 @@ app = FastAPI(
 
 app.include_router(health.router)
 app.include_router(assets.router)
+app.include_router(live_market.router)
 app.include_router(prompts.router, prefix="/prompt")
 app.include_router(workers.router)
 
