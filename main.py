@@ -1,23 +1,91 @@
 from fastapi import FastAPI
 from sqlalchemy import text, select
-
-from routers import assets, health, live_market
+import os
+from routers import assets, health
 import prompt.prompts as prompts
 from prompt import prompt_text
 from db import DbSession
-import feedparser
 from ingestion import rss
 from models import DataSource
-from extraction.extract_article import extract_article
 from workers import workers
 from auth import login
 from admin import gestion
+import logging
+from dotenv import load_dotenv
+import asyncio
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from config.rss_feeds import RSS_FEEDS
+from ingestion.rss import ingest_rss_feed
+from workers.workers import poll_rss_worker
+
+
+load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+
+RUN_WORKERS = os.getenv("RUN_WORKERS", "false").lower() == "true"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    worker_tasks: list[asyncio.Task] = []
+
+    if RUN_WORKERS:
+        worker_tasks = [
+            asyncio.create_task(
+                poll_rss_worker(feed),
+                name=f"poll-rss-{feed.name}",
+            )
+            for feed in RSS_FEEDS
+        ]
+
+        logger.info(
+            "Started %d RSS worker(s): %s",
+            len(worker_tasks),
+            ", ".join(feed.name for feed in RSS_FEEDS),
+        )
+    else:
+        logger.info("Background workers are disabled")
+
+    app.state.worker_tasks = worker_tasks
+
+    try:
+        yield
+    finally:
+        logger.info(
+            "Stopping %d background worker(s)",
+            len(worker_tasks),
+        )
+
+        for task in worker_tasks:
+            task.cancel()
+
+        results = await asyncio.gather(
+            *worker_tasks,
+            return_exceptions=True,
+        )
+
+        for task, result in zip(worker_tasks, results):
+            if isinstance(result, Exception) and not isinstance(
+                result,
+                asyncio.CancelledError,
+            ):
+                logger.error(
+                    "Worker %s stopped with an error: %r",
+                    task.get_name(),
+                    result,
+                )
+
+        logger.info("All background workers stopped")
 
 
 app = FastAPI(
     title="FAAH API",
     description="API backend de l'application FAAH",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.include_router(health.router)
@@ -40,12 +108,6 @@ async def test_db(db: DbSession):
         "rows": [dict(row) for row in rows],
     }
 
-@app.get("/test_db_orm")
-async def test_db_orm(db: DbSession):
-    result = await db.execute(select(Test))
-    rows = result.scalars().all()
-
-    return rows
 
 
 RSS_URL = "https://www.investing.com/rss/news_25.rss"

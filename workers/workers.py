@@ -6,8 +6,8 @@ from fastapi import APIRouter
 
 from ingestion import rss
 from models import DataSource
-
-from db import DbSession
+from config.rss_feeds import RSS_FEEDS, RSSFeed
+from db import DbSession, AsyncSessionLocal
 
 router = APIRouter(tags=["Workers"])
 
@@ -17,45 +17,33 @@ logger = logging.getLogger(__name__)
 
 POLL_INTERVAL = 360  # 5 mins
 
-@router.get("/poll-rss")
-async def poll_rss(db: DbSession):
-    """
-    Poll the RSS feed for new articles and ingest them into the database.
-    This endpoint is intended to be called by a scheduler or cron job.
-    """
-    while True:
-        try:
-            news = await rss.ingest_investing_stock_news(db)
+async def poll_rss_worker(feed: RSSFeed) -> None:
+    logger.info("RSS worker started: %s", feed.name)
 
-            if news:
-                logger.info(f"Ingested {len(news)} new articles.")
-            else:
-                logger.info("No new articles found.")
+    try:
+        while True:
+            try:
+                async with AsyncSessionLocal() as db:
+                    new_source_ids = await rss.ingest_rss_feed(
+                        db,
+                        feed_name=feed.name,
+                        feed_url=feed.url,
+                        source_prefix=feed.source_prefix,
+                    )
 
-        except Exception as e:
-            logger.error(f"Error while polling RSS feed: {e}")
-            return {"error": str(e)}
+                    logger.info(
+                        "[%s] Ingested %d new article(s)",
+                        feed.name,
+                        len(new_source_ids),
+                    )
 
-        await asyncio.sleep(POLL_INTERVAL)
+            except Exception:
+                logger.exception(
+                    "[%s] RSS worker failed",
+                    feed.name,
+                )
 
+            await asyncio.sleep(feed.poll_interval)
 
-@router.get("/poll-rss_tech")
-async def poll_rss_tech(db: DbSession):
-    """
-    Poll the RSS feed for new articles and ingest them into the database.
-    This endpoint is intended to be called by a scheduler or cron job.
-    """
-    while True:
-        try:
-            news = await rss.ingest_tech_stock_news(db)
-
-            if news:
-                logger.info(f"Ingested {len(news)} new articles.")
-            else:
-                logger.info("No new articles found.")
-
-        except Exception as e:
-            logger.error(f"Error while polling RSS feed: {e}")
-            return {"error": str(e)}
-
-        await asyncio.sleep(POLL_INTERVAL)
+    finally:
+        logger.info("RSS worker stopped: %s", feed.name)

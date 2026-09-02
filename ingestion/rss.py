@@ -5,7 +5,7 @@ import logging
 import re
 from datetime import datetime
 from typing import Any
-
+import asyncio
 import feedparser
 import httpx
 from sqlalchemy import select
@@ -20,10 +20,6 @@ logger = logging.getLogger(__name__)
 
 # Start with one high-value feed.
 # Add more Investing.com feeds later without changing the ingestion logic.
-INVESTING_RSS_FEEDS = {
-    "stock_market": "https://www.investing.com/rss/news_25.rss",
-    "tech_stocks": "https://news.google.com/rss/search?q=technology+stocks&hl=en-US&gl=US&ceid=US:en"
-}
 
 
 REQUEST_HEADERS = {
@@ -125,9 +121,8 @@ async def ingest_rss_feed(
     source_prefix: str,
 ) -> list[int]:
     """
-    Fetch one RSS feed, insert unseen articles into data_sources,
-    and return the IDs of newly inserted rows.
-    Deduplication is performed using src_original_url.
+    Fetch an RSS feed, insert new articles, and classify every
+    unprocessed article found in the current feed.
     """
     entries = await fetch_rss(feed_url)
 
@@ -137,21 +132,33 @@ async def ingest_rss_feed(
     urls = {entry["url"] for entry in entries}
 
     result = await db.execute(
-        select(DataSource.src_original_url).where(
+        select(DataSource).where(
             DataSource.src_original_url.in_(urls)
         )
     )
 
-    existing_urls = set(result.scalars().all())
+    existing_sources = {
+        source.src_original_url: source
+        for source in result.scalars().all()
+    }
 
     new_sources: list[DataSource] = []
 
+    # Existing articles whose earlier classification failed
+    source_ids_to_classify = [
+        source.src_id
+        for source in existing_sources.values()
+        if not source.src_is_processed
+    ]
+
+    source_type = f"{source_prefix}:{feed_name}"
+
     for entry in entries:
-        if entry["url"] in existing_urls:
+        if entry["url"] in existing_sources:
             continue
 
         source = DataSource(
-            src_type=f"{source_prefix}:{feed_name}",
+            src_type=source_type,
             src_title=entry["title"],
             src_original_url=entry["url"],
             src_content=entry["content"],
@@ -162,82 +169,59 @@ async def ingest_rss_feed(
         db.add(source)
         new_sources.append(source)
 
-        # Protect against duplicate URLs appearing twice inside one feed response.
-        existing_urls.add(entry["url"])
+        # Prevent duplicates within the same response.
+        existing_sources[entry["url"]] = source
 
-    if not new_sources:
-        return []
-
-    # Generate src_id values before commit.
-    await db.flush()
-
-    new_source_ids = [source.src_id for source in new_sources]
-
-    await db.commit()
-
-    logger.info(
-        "RSS feed %s: inserted %d new article(s)",
-        feed_name,
-        len(new_source_ids),
-    )
-
-    return new_source_ids
-
-
-async def ingest_investing_stock_news(db: DbSession) -> list[int]:
-    """
-    Fetch Investing.com's Stock Market News RSS feed once.
-    """
-    source_ids = await ingest_rss_feed(
-        db,
-        feed_name="stock_market",
-        feed_url=INVESTING_RSS_FEEDS["stock_market"],
-        source_prefix="rss:investing",
-    )
-    for source_id in source_ids:
-        logger.info("New Investing.com article: %d", source_id)
-        await classify_source(source_id, db)
-    return source_ids
-
-
-
-
-async def ingest_tech_stock_news(db: DbSession) -> list[int]:
-    """
-    Fetch Investing.com's Stock Market News RSS feed once.
-    """
-    source_ids = await ingest_rss_feed(
-        db,
-        feed_name="tech_stocks",
-        feed_url=INVESTING_RSS_FEEDS["tech_stocks"],
-        source_prefix="rss:investing",
-    )
-    for source_id in source_ids:
-        logger.info("New Investing.com article: %d", source_id)
-        await classify_source(source_id, db)
-    return source_ids
-
-
-async def ingest_all_investing_feeds(db: DbSession) -> list[int]:
-    """
-    Fetch every Investing.com feed configured in INVESTING_RSS_FEEDS.
-
-    For now this is only Stock Market News. Later you can add:
-        "company_news": "https://www.investing.com/rss/news_356.rss",
-        "earnings": "https://www.investing.com/rss/news_1062.rss",
-        "analyst_ratings": "https://www.investing.com/rss/news_1061.rss",
-        "economic_indicators": "https://www.investing.com/rss/news_95.rss",
-    """
     new_source_ids: list[int] = []
 
-    for feed_name, feed_url in INVESTING_RSS_FEEDS.items():
-        ids = await ingest_rss_feed(
-            db,
-            feed_name=feed_name,
-            feed_url=feed_url,
-            source_prefix="rss:investing",
+    if new_sources:
+        await db.flush()
+
+        new_source_ids = [
+            source.src_id
+            for source in new_sources
+        ]
+
+        source_ids_to_classify.extend(new_source_ids)
+
+        # Save articles before classification.
+        await db.commit()
+
+        logger.info(
+            "RSS feed %s: inserted %d new article(s)",
+            feed_name,
+            len(new_source_ids),
         )
-        new_source_ids.extend(ids)
+
+    # dict.fromkeys removes duplicate IDs while preserving order.
+    for source_id in dict.fromkeys(source_ids_to_classify):
+        try:
+            logger.info(
+                "Classifying RSS source %d from %s",
+                source_id,
+                feed_name,
+            )
+
+            await classify_source(source_id, db)
+
+            # Harmless if classify_source already commits.
+            await db.commit()
+
+        except asyncio.CancelledError:
+            raise
+
+        except Exception:
+            # Reset the SQLAlchemy session so later articles can continue.
+            await db.rollback()
+
+            logger.exception(
+                "Classification failed for source %d; "
+                "it will be retried during the next %s poll",
+                source_id,
+                feed_name,
+            )
 
     return new_source_ids
+
+
 
