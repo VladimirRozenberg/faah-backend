@@ -4,24 +4,24 @@ import asyncio
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
+from asset_catalog import ALL_ASSETS
 from live_market.candle_builder import public_candle
 from live_market.candle_repository import read_candles
 from live_market.config import TIMEFRAME
 from live_market.redis_client import get_current_candle, get_latest_quote
 from live_market.market_schemas import LiveCandleResponse, LiveQuote
-from market_data import TECH_STOCKS
 
 
 router = APIRouter(tags=["Marché en direct"])
 
 
 def normalize_symbol(symbol: str) -> str:
-    """Vérifie que l'action existe dans notre catalogue."""
+    """Vérifie que l'actif existe dans notre catalogue."""
 
     symbol = symbol.upper()
 
-    if symbol not in TECH_STOCKS:
-        raise HTTPException(status_code=404, detail="Action inconnue.")
+    if symbol not in ALL_ASSETS:
+        raise HTTPException(status_code=404, detail="Actif inconnu.")
 
     return symbol
 
@@ -87,7 +87,7 @@ async def market_websocket(websocket: WebSocket, symbol: str) -> None:
 
     symbol = symbol.upper()
 
-    if symbol not in TECH_STOCKS:
+    if symbol not in ALL_ASSETS:
         await websocket.close(code=1008)
         return
 

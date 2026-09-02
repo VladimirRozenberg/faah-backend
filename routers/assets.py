@@ -1,7 +1,10 @@
-"""Routes HTTP liées aux actions et à leur historique."""
+"""Routes HTTP liées aux actifs et à leur historique."""
 
 from fastapi import APIRouter, HTTPException, Query
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from asset_repository import sync_all_assets
 from market_data import (
     ALLOWED_PERIOD_INTERVALS,
     InvalidHistoryRequestError,
@@ -11,19 +14,72 @@ from market_data import (
 )
 
 from schemas import (
+    AssetItem,
     AssetListResponse,
     AssetSummary,
+    AssetSyncResponse,
     CandleResponse,
-    StockSyncResponse,
+    MarketListResponse,
 )
 
 from db import DbSession
-from stock_repository import sync_stocks
+from models import Asset, Commodity, Crypto, Forex, Stock
 
 
 # Toutes les routes de ce fichier commencent par /api et sont regroupées
 # sous le titre « Marché » dans la documentation Swagger.
 router = APIRouter(prefix="/api", tags=["Marché"])
+
+
+async def create_asset_item(
+    db: AsyncSession,
+    asset: Asset,
+) -> AssetItem:
+    """Transforme un Asset PostgreSQL en réponse complète."""
+
+    item = AssetItem(
+        id=asset.ast_id,
+        symbol=asset.ast_symbol,
+        name=asset.ast_name,
+        type=asset.ast_type,
+        is_active=asset.ast_is_active,
+        created_at=asset.ast_created_at,
+    )
+
+    if asset.ast_type == "stock":
+        stock = await db.get(Stock, asset.ast_id)
+
+        if stock is not None:
+            item.exchange = stock.sto_exchange
+            item.sector = stock.sto_sector
+            item.industry = stock.sto_industry
+
+    elif asset.ast_type == "crypto":
+        crypto = await db.get(Crypto, asset.ast_id)
+
+        if crypto is not None:
+            item.blockchain = crypto.cry_blockchain
+            item.contract_address = crypto.cry_contract_address
+
+    elif asset.ast_type == "forex":
+        forex = await db.get(Forex, asset.ast_id)
+
+        if forex is not None:
+            item.base_currency = forex.for_base_currency
+            item.quote_currency = forex.for_quote_currency
+
+    elif asset.ast_type == "commodity":
+        commodity = await db.get(Commodity, asset.ast_id)
+
+        if commodity is not None:
+            item.unit = commodity.com_unit
+            item.contract_size = (
+                float(commodity.com_contract_size)
+                if commodity.com_contract_size is not None
+                else None
+            )
+
+    return item
 
 
 def raise_http_error(error: Exception) -> None:
@@ -32,7 +88,7 @@ def raise_http_error(error: Exception) -> None:
     if isinstance(error, UnknownSymbolError):
         raise HTTPException(
             status_code=404,
-            detail=f"Le symbole {error} ne fait pas partie des dix actions disponibles.",
+            detail=f"Le symbole {error} ne fait pas partie du catalogue.",
         ) from error
     if isinstance(error, InvalidHistoryRequestError):
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -42,20 +98,63 @@ def raise_http_error(error: Exception) -> None:
 
 
 @router.get("/assets", response_model=AssetListResponse)
-def list_assets() -> AssetListResponse:
-    """Retourne les dix actions avec leur dernier prix et leur variation."""
+async def list_assets(db: DbSession) -> AssetListResponse:
+    """Retourne tous les actifs enregistrés dans PostgreSQL."""
+
+    result = await db.execute(
+        select(Asset).order_by(Asset.ast_type, Asset.ast_name)
+    )
+    database_assets = result.scalars().all()
+
+    items = []
+
+    for asset in database_assets:
+        item = await create_asset_item(db, asset)
+        items.append(item)
+
+    return AssetListResponse(
+        count=len(items),
+        items=items,
+    )
+
+
+@router.get("/market", response_model=MarketListResponse)
+def list_market() -> MarketListResponse:
+    """Retourne les prix des actifs avec yfinance."""
 
     try:
         items = market_data_service.get_assets()
-        return AssetListResponse(count=len(items), items=items)
+        return MarketListResponse(
+            count=len(items),
+            items=items,
+        )
     except Exception as error:
         raise_http_error(error)
-        raise  # Cette ligne aide uniquement l'analyse statique de Python.
+        raise
 
 
-@router.get("/assets/{symbol}", response_model=AssetSummary)
-def get_asset(symbol: str) -> AssetSummary:
-    """Retourne les informations principales d'une action."""
+@router.get("/assets/{symbol}", response_model=AssetItem)
+async def get_asset(symbol: str, db: DbSession) -> AssetItem:
+    """Recherche un actif dans PostgreSQL avec son symbole."""
+
+    symbol = symbol.upper()
+
+    asset = await db.scalar(
+        select(Asset).where(Asset.ast_symbol == symbol)
+    )
+
+    if asset is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"L'actif {symbol} n'existe pas.",
+        )
+
+    return await create_asset_item(db, asset)
+
+
+@router.get("/assets/{symbol}/market", response_model=AssetSummary)
+def get_asset_market(symbol: str) -> AssetSummary:
+    """Retourne le prix et la variation d'un actif avec yfinance."""
 
     try:
         return market_data_service.get_asset(symbol)
@@ -89,19 +188,26 @@ def history_options() -> dict[str, list[str]]:
     }
 
 @router.post(
-    "/assets/stocks/sync",
-    response_model=StockSyncResponse,
+    "/assets/sync-all",
+    response_model=AssetSyncResponse,
 )
-async def synchronize_stocks(
+async def synchronize_all_assets(
     db: DbSession,
-) -> StockSyncResponse:
-    """Enregistre les actions dans assets et stocks."""
+) -> AssetSyncResponse:
+    """Enregistre les actifs dans leur table générale et spécialisée."""
 
-    result = await sync_stocks(db)
+    try:
+        result = await sync_all_assets(db)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=str(error),
+        ) from error
 
-    return StockSyncResponse(
+    return AssetSyncResponse(
         created=result["created"],
         updated=result["updated"],
         unchanged=result["unchanged"],
+        unavailable=result["unavailable"],
         total=result["total"],
     )

@@ -6,11 +6,12 @@ from pydantic import BaseModel, Field
 
 
 class AssetSummary(BaseModel):
-    """Informations affichées dans la liste des actions."""
+    """Prix et variation d'un actif provenant de yfinance."""
 
     symbol: str
     name: str
-    exchange: str
+    type: str
+    exchange: str | None = None
     currency: str
     last_price: float
     previous_close: float
@@ -21,11 +22,46 @@ class AssetSummary(BaseModel):
     source: str = "Yahoo Finance via yfinance"
 
 
-class AssetListResponse(BaseModel):
-    """Réponse de l'endpoint qui retourne les dix actions."""
+class MarketListResponse(BaseModel):
+    """Prix des actifs disponibles dans le marché."""
 
     count: int
     items: list[AssetSummary]
+
+
+class AssetItem(BaseModel):
+    """Informations générales et spécialisées d'un actif."""
+
+    id: int
+    symbol: str
+    name: str
+    type: str
+    is_active: bool
+    created_at: datetime
+
+    # Informations d'une action.
+    exchange: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+
+    # Informations d'une cryptomonnaie.
+    blockchain: str | None = None
+    contract_address: str | None = None
+
+    # Informations d'une paire Forex.
+    base_currency: str | None = None
+    quote_currency: str | None = None
+
+    # Informations d'une matière première.
+    unit: str | None = None
+    contract_size: float | None = None
+
+
+class AssetListResponse(BaseModel):
+    """Liste des actifs enregistrés dans PostgreSQL."""
+
+    count: int
+    items: list[AssetItem]
 
 
 class Candle(BaseModel):
@@ -40,7 +76,7 @@ class Candle(BaseModel):
 
 
 class CandleResponse(BaseModel):
-    """Historique d'une action pour une période donnée."""
+    """Historique d'un actif pour une période donnée."""
 
     symbol: str
     period: str
@@ -55,10 +91,11 @@ class HealthResponse(BaseModel):
     status: str = Field(examples=["ok"])
 
 
-class StockSyncResponse(BaseModel):
-    """Résultat de la synchronisation des actions."""
+class AssetSyncResponse(BaseModel):
+    """Résultat de la synchronisation du catalogue d'actifs."""
 
     created: int
     updated: int
     unchanged: int
+    unavailable: int
     total: int

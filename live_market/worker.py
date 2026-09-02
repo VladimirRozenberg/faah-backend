@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 import yfinance as yf
 
+from asset_catalog import ALL_ASSETS
 from live_market.candle_builder import update_candle
 from live_market.candle_repository import save_candle
 from live_market.history_loader import backfill_recent_history
@@ -14,7 +15,6 @@ from live_market.redis_client import (
     save_latest_quote,
 )
 from live_market.market_schemas import LiveQuote
-from market_data import TECH_STOCKS
 
 
 def create_quote(message: dict) -> LiveQuote | None:
@@ -42,7 +42,7 @@ def create_quote(message: dict) -> LiveQuote | None:
     except (KeyError, TypeError, ValueError):
         return None
 
-    if symbol not in TECH_STOCKS or price <= 0:
+    if symbol not in ALL_ASSETS or price <= 0:
         return None
 
     return LiveQuote(
@@ -81,7 +81,7 @@ async def main() -> None:
         print(f"Historique indisponible : {error}")
 
     websocket = yf.AsyncWebSocket(verbose=False)
-    await websocket.subscribe(list(TECH_STOCKS))
+    await websocket.subscribe(list(ALL_ASSETS))
 
     print("Connexion yfinance ouverte.")
     await websocket.listen(process_message)

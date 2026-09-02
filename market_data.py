@@ -12,23 +12,8 @@ from time import monotonic
 import pandas as pd
 import yfinance as yf
 
+from asset_catalog import ALL_ASSETS
 from schemas import AssetSummary, Candle, CandleResponse
-
-
-# Catalogue volontairement limité pour la première version du projet.
-TECH_STOCKS: dict[str, dict[str, str]] = {
-    "AAPL": {"name": "Apple", "exchange": "NASDAQ"},
-    "MSFT": {"name": "Microsoft", "exchange": "NASDAQ"},
-    "NVDA": {"name": "NVIDIA", "exchange": "NASDAQ"},
-    "GOOGL": {"name": "Alphabet", "exchange": "NASDAQ"},
-    "AMZN": {"name": "Amazon", "exchange": "NASDAQ"},
-    "META": {"name": "Meta Platforms", "exchange": "NASDAQ"},
-    "TSLA": {"name": "Tesla", "exchange": "NASDAQ"},
-    "AVGO": {"name": "Broadcom", "exchange": "NASDAQ"},
-    "ORCL": {"name": "Oracle", "exchange": "NYSE"},
-    "AMD": {"name": "AMD", "exchange": "NASDAQ"},
-    "PYPL": {"name": "Paypal", "exchange": "NASDAQ"},
-}
 
 
 # On limite les combinaisons afin d'éviter les requêtes invalides ou énormes.
@@ -101,13 +86,13 @@ class MarketDataService:
         return float(numbers.iloc[-1])
 
     def get_assets(self) -> list[AssetSummary]:
-        """Retourne le prix et la variation des dix actions en deux requêtes groupées."""
+        """Retourne le prix et la variation des actifs du catalogue."""
 
         cached = self._read_cache("assets")
         if cached is not None:
             return cached  # type: ignore[return-value]
 
-        symbols = list(TECH_STOCKS)
+        symbols = list(ALL_ASSETS)
 
         try:
             daily_data = yf.download(
@@ -139,7 +124,7 @@ class MarketDataService:
         retrieved_at = datetime.now(timezone.utc)
         assets: list[AssetSummary] = []
 
-        for symbol, metadata in TECH_STOCKS.items():
+        for symbol, metadata in ALL_ASSETS.items():
             daily = self._symbol_frame(daily_data, symbol)
             intraday = self._symbol_frame(intraday_data, symbol)
 
@@ -174,8 +159,9 @@ class MarketDataService:
                 AssetSummary(
                     symbol=symbol,
                     name=metadata["name"],
-                    exchange=metadata["exchange"],
-                    currency="USD",
+                    type=metadata["type"],
+                    exchange=metadata.get("exchange"),
+                    currency=metadata.get("quote", "USD"),
                     last_price=round(last_price, 4),
                     previous_close=round(previous_close, 4),
                     change=round(change, 4),
@@ -187,7 +173,7 @@ class MarketDataService:
 
         if not assets:
             raise MarketDataUnavailableError(
-                "Aucune des dix actions n'a retourné un cours exploitable."
+                "Aucun actif n'a retourné un cours exploitable."
             )
 
         self._write_cache("assets", assets)
@@ -195,7 +181,7 @@ class MarketDataService:
 
     def get_asset(self, symbol: str) -> AssetSummary:
         normalized_symbol = symbol.upper()
-        if normalized_symbol not in TECH_STOCKS:
+        if normalized_symbol not in ALL_ASSETS:
             raise UnknownSymbolError(normalized_symbol)
 
         asset = next(
@@ -212,7 +198,7 @@ class MarketDataService:
         self, symbol: str, period: str = "1d", interval: str = "5m"
     ) -> CandleResponse:
         normalized_symbol = symbol.upper()
-        if normalized_symbol not in TECH_STOCKS:
+        if normalized_symbol not in ALL_ASSETS:
             raise UnknownSymbolError(normalized_symbol)
 
         allowed_intervals = ALLOWED_PERIOD_INTERVALS.get(period)

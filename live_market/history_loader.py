@@ -5,18 +5,18 @@ from datetime import timezone
 import pandas as pd
 import yfinance as yf
 
+from asset_catalog import ALL_ASSETS
 from live_market.candle_repository import save_candles
 from live_market.config import TIMEFRAME
 from live_market.market_schemas import LiveCandle
-from market_data import TECH_STOCKS
 
 
 def download_recent_history() -> list[LiveCandle]:
-    """Télécharge les bougies récentes des actions du catalogue."""
+    """Télécharge les bougies récentes des actifs du catalogue."""
 
     candles = []
 
-    for symbol in TECH_STOCKS:
+    for symbol in ALL_ASSETS:
         history = yf.Ticker(symbol).history(
             period="1d",
             interval=TIMEFRAME,
