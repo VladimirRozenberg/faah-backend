@@ -10,6 +10,9 @@ from ingestion import rss
 from models import DataSource
 from extraction.extract_article import extract_article
 from workers import workers
+from auth import login
+from admin import gestion
+
 
 app = FastAPI(
     title="FAAH API",
@@ -22,6 +25,9 @@ app.include_router(assets.router)
 app.include_router(live_market.router)
 app.include_router(prompts.router, prefix="/prompt")
 app.include_router(workers.router)
+app.include_router(login.router)
+app.include_router(gestion.router)
+ 
 
 
 @app.get("/test-db")

@@ -60,6 +60,15 @@ class User(Base):
         server_default=func.now(),
         nullable=False,
     )
+    
+    usr_role: Mapped[str] = mapped_column(
+        String,
+        default="employe",
+        server_default="employe",
+        nullable=False,
+    )
+ 
+
 
 
 # ============================================================

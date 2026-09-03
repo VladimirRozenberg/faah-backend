@@ -66,7 +66,9 @@ CREATE TABLE users (
     usr_password_hash VARCHAR NOT NULL,
 
     usr_is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    usr_created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    usr_created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    usr_role VARCHAR NOT NULL DEFAULT 'employe'
+
 );
 
 
