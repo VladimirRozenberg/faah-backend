@@ -1,3 +1,7 @@
+import asyncio
+from fastapi import FastAPI, HTTPException, status
+from venv import logger
+
 import db
 from sqlalchemy import select
 
@@ -6,6 +10,10 @@ import json
 from models import DataSource, Prompt, SourceClassification, Analysis, AnalysisSource
 from db import DbSession
 from openai import AsyncOpenAI
+from datetime import datetime, timedelta, timezone
+import logging
+from typing import Literal
+from pydantic import BaseModel
 
 
 client=AsyncOpenAI(
@@ -14,17 +22,62 @@ client=AsyncOpenAI(
     )
 
 
+logger = logging.getLogger(__name__)
+
+
+class ClassificationResult(BaseModel):
+    cls_category: str
+    cls_importance: str
+    cls_sentiment: str
+    cls_reason: str
+    cls_should_trigger: bool
+
+
+def parse_classification(content: str | None) -> ClassificationResult:
+    if not content or not content.strip():
+        raise ValueError("DeepSeek returned empty output")
+
+    cleaned = content.strip()
+
+    if cleaned.startswith("```"):
+        cleaned = cleaned.removeprefix("```json")
+        cleaned = cleaned.removeprefix("```")
+        cleaned = cleaned.removesuffix("```").strip()
+
+    data = json.loads(cleaned, strict=False)
+
+    return ClassificationResult.model_validate(data)    
+
+
 async def classify_source(source_id: int, db: DbSession):
+
     source = await db.get(DataSource, source_id)
 
-    if not source:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Source not found",
-        )
+    if source is None:
+        logger.info("Source not found; skipping classification")
+        return None
 
+    published_at = source.src_published_at
+
+    if published_at is not None:
+        if published_at.tzinfo is None:
+            published_at = published_at.replace(tzinfo=timezone.utc)
+
+        source_age = datetime.now(timezone.utc) - published_at
+
+        if source_age > timedelta(days=2):
+            logger.info(
+                "Skipping old source: src_id=%s, published_at=%s, age_hours=%.1f",
+                source.src_id,
+                published_at.isoformat(),
+                source_age.total_seconds() / 3600,
+            )
+            return None
+
+    source.src_is_processed = True
 
     prompt_text = generate_classification_prompt(source)
+
 
 # Record exactly what was sent to the LLM
     db_prompt = Prompt(
@@ -64,17 +117,21 @@ async def classify_source(source_id: int, db: DbSession):
         raise RuntimeError("DeepSeek returned empty output")
 
 
-    classification = json.loads(content)
+    classification_json = json.loads(content, strict=False)
+
+    classification = ClassificationResult.model_validate(
+    classification_json
+)
 
     db_classification = SourceClassification(
-        cls_src_id=source_id,
-        cls_prm_id=db_prompt.prm_id,
-        cls_category=classification["cls_category"],
-        cls_importance=classification["cls_importance"],
-        cls_sentiment=classification["cls_sentiment"],
-        cls_should_trigger=classification["cls_should_trigger"],
-        cls_reason=classification["cls_reason"],
-    )
+    cls_src_id=source_id,
+    cls_prm_id=db_prompt.prm_id,
+    cls_category=classification.cls_category,
+    cls_importance=classification.cls_importance,
+    cls_sentiment=classification.cls_sentiment,
+    cls_should_trigger=classification.cls_should_trigger,
+    cls_reason=classification.cls_reason,
+)
 
     # Stage INSERT
     db.add(db_classification)
@@ -87,10 +144,33 @@ async def classify_source(source_id: int, db: DbSession):
     # Reload generated values such as cls_id and cls_created_at
     await db.refresh(db_classification)
 
-    if db_classification.cls_should_trigger:
-           db_analysis = await analyze_source(source_id, db_classification.cls_id, db)
+    classification_id = db_classification.cls_id
 
-    return db_classification, db_analysis if db_classification.cls_should_trigger else "its fake news"
+    if db_classification.cls_should_trigger:
+        for attempt in range(1, 4):
+            try:
+                db_analysis = await analyze_source(
+                    source_id,
+                       classification_id,
+                    db,
+                )
+                break
+
+            except Exception:
+                await db.rollback()
+
+                logger.exception(
+                    "Analysis failed: source_id=%s attempt=%d/3",
+                    source_id,
+                    attempt,
+                )
+
+                if attempt == 3:
+                    raise
+
+                await asyncio.sleep(2)
+
+    return db_classification, db_analysis if db_classification.cls_should_trigger else "It's not a source that should trigger an analysis"
 
 
 def generate_classification_prompt(source: DataSource) -> str:
@@ -145,10 +225,11 @@ Briefly explain why you chose the classification and whether the
 information could matter financially. Here you should use web search to verify the information and provide a short explanation of your reasoning. Also VERY IMPORTAN!!! include a short sentence if u used web search or not.
 
 cls_should_trigger:
-Set to true ONLY when BOTH of the following conditions are satisfied:
+Set to true ONLY when ALL of the following conditions are satisfied:
 
 The information is sufficiently credible.
 The information is financially significant enough to justify deeper analysis.
+The information in this article is fresh meaning it is not old news (published within the last 48 hours)
 
 If the source appears fabricated, generic, misleading, materially incomplete, or cannot be reasonably verified despite searching for a supposedly real and recent event, set cls_should_trigger to false.
 
@@ -256,6 +337,7 @@ async def analyze_source(
 
     db_analysis = Analysis(
         anl_prm_id=db_prompt.prm_id,
+        anl_cls_id=classification_id,
 
         # Not asset/portfolio-specific yet.
         anl_prt_id=None,

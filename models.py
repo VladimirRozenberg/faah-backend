@@ -566,6 +566,15 @@ class Analysis(Base):
         ForeignKey("portfolios.prt_id")
     )
 
+    anl_cls_id: Mapped[int | None] = mapped_column(
+    ForeignKey(
+        "source_classifications.cls_id",
+        ondelete="SET NULL",
+    ),
+    nullable=True,
+    index=True,
+)
+
     anl_ast_id: Mapped[int | None] = mapped_column(
         ForeignKey("assets.ast_id")
     )
