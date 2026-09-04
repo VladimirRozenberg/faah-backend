@@ -12,8 +12,8 @@ from time import monotonic
 import pandas as pd
 import yfinance as yf
 
-from asset_catalog import ALL_ASSETS
-from schemas import AssetSummary, Candle, CandleResponse
+from assets.catalog import ALL_ASSETS
+from assets.schemas import AssetSummary, Candle, CandleResponse
 
 
 # On limite les combinaisons afin d'éviter les requêtes invalides ou énormes.

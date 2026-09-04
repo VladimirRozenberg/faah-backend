@@ -1,27 +1,35 @@
 """Vérification et enregistrement du catalogue dans PostgreSQL."""
 
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import yfinance as yf
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from asset_catalog import ASSET_CATALOG
-from models import Asset, Commodity, Crypto, Forex, Stock
+from assets.catalog import ASSET_CATALOG
+from models import Asset, Crypto, Forex, Future, Stock
 
 
-def symbol_exists(symbol: str) -> bool:
-    """Vérifie que yfinance retourne des données pour le symbole."""
+def get_yahoo_information(symbol: str) -> dict | None:
+    """Récupère seulement les informations Yahoo utiles à notre base."""
 
     try:
-        history = yf.Ticker(symbol).history(
-            period="5d",
-            interval="1d",
-            auto_adjust=False,
-        )
-        return not history.empty
+        information = yf.Ticker(symbol).get_info()
+
+        if not information.get("quoteType"):
+            return None
+
+        return {
+            "yahoo_type": information.get("quoteType"),
+            "exchange": information.get("exchange"),
+            "currency": information.get("currency"),
+            "country": information.get("country"),
+            "sector": information.get("sector"),
+            "industry": information.get("industry"),
+        }
     except Exception:
-        return False
+        return None
 
 
 async def sync_specific_asset(
@@ -29,6 +37,7 @@ async def sync_specific_asset(
     asset: Asset,
     asset_type: str,
     information: dict,
+    yahoo_information: dict,
 ) -> bool:
     """Crée ou actualise la ligne dans la table spécialisée."""
 
@@ -39,16 +48,23 @@ async def sync_specific_asset(
             db.add(
                 Stock(
                     sto_ast_id=asset.ast_id,
-                    sto_exchange=information["exchange"],
-                    sto_sector=None,
-                    sto_industry=None,
+                    sto_sector=yahoo_information["sector"],
+                    sto_industry=yahoo_information["industry"],
                 )
             )
             return True
 
-        if row.sto_exchange != information["exchange"]:
-            row.sto_exchange = information["exchange"]
-            return True
+        has_changed = False
+
+        if row.sto_sector != yahoo_information["sector"]:
+            row.sto_sector = yahoo_information["sector"]
+            has_changed = True
+
+        if row.sto_industry != yahoo_information["industry"]:
+            row.sto_industry = yahoo_information["industry"]
+            has_changed = True
+
+        return has_changed
 
     elif asset_type == "crypto":
         row = await db.get(Crypto, asset.ast_id)
@@ -57,15 +73,29 @@ async def sync_specific_asset(
             db.add(
                 Crypto(
                     cry_ast_id=asset.ast_id,
+                    cry_base_currency=information["base"],
+                    cry_quote_currency=information["quote"],
                     cry_blockchain=information["blockchain"],
                     cry_contract_address=None,
                 )
             )
             return True
 
+        has_changed = False
+
+        if row.cry_base_currency != information["base"]:
+            row.cry_base_currency = information["base"]
+            has_changed = True
+
+        if row.cry_quote_currency != information["quote"]:
+            row.cry_quote_currency = information["quote"]
+            has_changed = True
+
         if row.cry_blockchain != information["blockchain"]:
             row.cry_blockchain = information["blockchain"]
-            return True
+            has_changed = True
+
+        return has_changed
 
     elif asset_type == "forex":
         row = await db.get(Forex, asset.ast_id)
@@ -92,28 +122,38 @@ async def sync_specific_asset(
 
         return has_changed
 
-    elif asset_type == "commodity":
-        row = await db.get(Commodity, asset.ast_id)
+    elif asset_type == "future":
+        row = await db.get(Future, asset.ast_id)
         contract_size = Decimal(str(information["contract_size"]))
 
         if row is None:
             db.add(
-                Commodity(
-                    com_ast_id=asset.ast_id,
-                    com_unit=information["unit"],
-                    com_contract_size=contract_size,
+                Future(
+                    fut_ast_id=asset.ast_id,
+                    fut_underlying_name=information["name"],
+                    fut_underlying_type=information["underlying_type"],
+                    fut_unit=information["unit"],
+                    fut_contract_size=contract_size,
                 )
             )
             return True
 
         has_changed = False
 
-        if row.com_unit != information["unit"]:
-            row.com_unit = information["unit"]
+        if row.fut_underlying_name != information["name"]:
+            row.fut_underlying_name = information["name"]
             has_changed = True
 
-        if row.com_contract_size != contract_size:
-            row.com_contract_size = contract_size
+        if row.fut_underlying_type != information["underlying_type"]:
+            row.fut_underlying_type = information["underlying_type"]
+            has_changed = True
+
+        if row.fut_unit != information["unit"]:
+            row.fut_unit = information["unit"]
+            has_changed = True
+
+        if row.fut_contract_size != contract_size:
+            row.fut_contract_size = contract_size
             has_changed = True
 
         return has_changed
@@ -138,7 +178,9 @@ async def sync_all_assets(db: AsyncSession) -> dict[str, int]:
             total += len(assets)
 
             for symbol, information in assets.items():
-                if not symbol_exists(symbol):
+                yahoo_information = get_yahoo_information(symbol)
+
+                if yahoo_information is None:
                     unavailable += 1
                     continue
 
@@ -151,7 +193,17 @@ async def sync_all_assets(db: AsyncSession) -> dict[str, int]:
                         ast_symbol=symbol,
                         ast_name=information["name"],
                         ast_type=asset_type,
-                        ast_is_active=True,
+                        ast_yahoo_type=yahoo_information["yahoo_type"],
+                        ast_exchange=(
+                            yahoo_information["exchange"]
+                            or information.get("exchange")
+                        ),
+                        ast_currency=(
+                            yahoo_information["currency"]
+                            or information.get("quote")
+                        ),
+                        ast_country=yahoo_information["country"],
+                        ast_is_tracked=True,
                     )
                     db.add(asset)
 
@@ -163,6 +215,7 @@ async def sync_all_assets(db: AsyncSession) -> dict[str, int]:
                         asset,
                         asset_type,
                         information,
+                        yahoo_information,
                     )
                     created += 1
                     continue
@@ -179,8 +232,29 @@ async def sync_all_assets(db: AsyncSession) -> dict[str, int]:
                     asset.ast_name = information["name"]
                     has_changed = True
 
-                if asset.ast_is_active is not True:
-                    asset.ast_is_active = True
+                yahoo_exchange = (
+                    yahoo_information["exchange"]
+                    or information.get("exchange")
+                )
+                yahoo_currency = (
+                    yahoo_information["currency"]
+                    or information.get("quote")
+                )
+
+                if asset.ast_yahoo_type != yahoo_information["yahoo_type"]:
+                    asset.ast_yahoo_type = yahoo_information["yahoo_type"]
+                    has_changed = True
+
+                if asset.ast_exchange != yahoo_exchange:
+                    asset.ast_exchange = yahoo_exchange
+                    has_changed = True
+
+                if asset.ast_currency != yahoo_currency:
+                    asset.ast_currency = yahoo_currency
+                    has_changed = True
+
+                if asset.ast_country != yahoo_information["country"]:
+                    asset.ast_country = yahoo_information["country"]
                     has_changed = True
 
                 specific_changed = await sync_specific_asset(
@@ -188,9 +262,11 @@ async def sync_all_assets(db: AsyncSession) -> dict[str, int]:
                     asset,
                     asset_type,
                     information,
+                    yahoo_information,
                 )
 
                 if has_changed or specific_changed:
+                    asset.ast_updated_at = datetime.now(timezone.utc)
                     updated += 1
                 else:
                     unchanged += 1

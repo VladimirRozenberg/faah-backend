@@ -1,1 +1,1 @@
-"""Fonctionnalités du marché en direct et des bougies."""
+"""Fonctionnalités du marché en direct."""

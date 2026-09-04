@@ -1,15 +1,15 @@
 from fastapi import FastAPI
 from sqlalchemy import text, select
 import os
-from routers import assets, health
 
-from routers import assets, health, live_market
+from routers import assets, health, live_market, portfolios
 import prompt.prompts as prompts
 from prompt import prompt_text
 from db import DbSession
 from ingestion import rss
 from models import DataSource
 from workers import workers
+from extraction.extract_article import extract_article
 from auth import login
 from admin import gestion
 import logging
@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from config.rss_feeds import RSS_FEEDS
 from ingestion.rss import ingest_rss_feed
 from workers.workers import poll_rss_worker
-import os
 
 load_dotenv()
 
@@ -93,6 +92,7 @@ app = FastAPI(
 app.include_router(health.router)
 app.include_router(assets.router)
 app.include_router(live_market.router)
+app.include_router(portfolios.router)
 app.include_router(prompts.router, prefix="/prompt")
 app.include_router(workers.router)
 app.include_router(login.router)
@@ -197,7 +197,6 @@ async def test_rss_analysis(db: DbSession):
         "results": results,
     }
 
-<<<<<<< HEAD
 @app.get("/test_article_extraction")
 async def test_article_extraction(url : str):
     article_content = await extract_article(url)
@@ -207,5 +206,3 @@ async def test_article_extraction(url : str):
             "message": "Failed to extract article content."
             }
     return article_content
-=======
->>>>>>> f759f7d (improved classification with regards to date of the news)

@@ -2,14 +2,11 @@
 
 import asyncio
 
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
-from asset_catalog import ALL_ASSETS
-from live_market.candle_builder import public_candle
-from live_market.candle_repository import read_candles
-from live_market.config import TIMEFRAME
-from live_market.redis_client import get_current_candle, get_latest_quote
-from live_market.market_schemas import LiveCandleResponse, LiveQuote
+from assets.catalog import ALL_ASSETS
+from live_market.redis_client import get_latest_quote
+from live_market.market_schemas import LiveQuote
 
 
 router = APIRouter(tags=["Marché en direct"])
@@ -24,42 +21,6 @@ def normalize_symbol(symbol: str) -> str:
         raise HTTPException(status_code=404, detail="Actif inconnu.")
 
     return symbol
-
-
-@router.get(
-    "/api/live/assets/{symbol}/candles",
-    response_model=LiveCandleResponse,
-)
-async def get_live_candles(
-    symbol: str,
-    limit: int = Query(default=300, ge=1, le=1000),
-) -> LiveCandleResponse:
-    """Retourne l'historique et ajoute la bougie Redis actuelle."""
-
-    symbol = normalize_symbol(symbol)
-    candles = await read_candles(symbol, TIMEFRAME, limit)
-    current = await get_current_candle(symbol)
-
-    if current is not None:
-        live_candle = public_candle(current)
-
-        if candles and candles[-1].timestamp == live_candle.timestamp:
-            # Le volume historique est plus fiable que le volume WebSocket.
-            if live_candle.volume == 0 and candles[-1].volume > 0:
-                live_candle.volume = candles[-1].volume
-
-            candles[-1] = live_candle
-        else:
-            candles.append(live_candle)
-
-    candles = candles[-limit:]
-
-    return LiveCandleResponse(
-        symbol=symbol,
-        timeframe=TIMEFRAME,
-        count=len(candles),
-        candles=candles,
-    )
 
 
 @router.get(
@@ -83,7 +44,7 @@ async def get_latest_price(symbol: str) -> LiveQuote:
 
 @router.websocket("/ws/market/{symbol}")
 async def market_websocket(websocket: WebSocket, symbol: str) -> None:
-    """Envoie le dernier état Redis à Avalonia toutes les 5 secondes."""
+    """Envoie le dernier cours Redis à Avalonia toutes les 3 secondes."""
 
     symbol = symbol.upper()
 
@@ -96,8 +57,6 @@ async def market_websocket(websocket: WebSocket, symbol: str) -> None:
     try:
         while True:
             latest = await get_latest_quote(symbol)
-            current = await get_current_candle(symbol)
-
             await websocket.send_json(
                 {
                     "type": "market_update",
@@ -107,15 +66,10 @@ async def market_websocket(websocket: WebSocket, symbol: str) -> None:
                         if latest is not None
                         else None
                     ),
-                    "candle": (
-                        public_candle(current).model_dump(mode="json")
-                        if current is not None
-                        else None
-                    ),
                 }
             )
 
-            await asyncio.sleep(5)
+            await asyncio.sleep(3)
 
     except (WebSocketDisconnect, RuntimeError):
         pass

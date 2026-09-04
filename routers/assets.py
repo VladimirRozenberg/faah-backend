@@ -4,8 +4,8 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from asset_repository import sync_all_assets
-from market_data import (
+from assets.repository import sync_all_assets
+from assets.market_data import (
     ALLOWED_PERIOD_INTERVALS,
     InvalidHistoryRequestError,
     MarketDataUnavailableError,
@@ -13,7 +13,7 @@ from market_data import (
     market_data_service,
 )
 
-from schemas import (
+from assets.schemas import (
     AssetItem,
     AssetListResponse,
     AssetSummary,
@@ -23,7 +23,7 @@ from schemas import (
 )
 
 from db import DbSession
-from models import Asset, Commodity, Crypto, Forex, Stock
+from models import Asset, Crypto, Forex, Future, Stock
 
 
 # Toutes les routes de ce fichier commencent par /api et sont regroupées
@@ -42,15 +42,19 @@ async def create_asset_item(
         symbol=asset.ast_symbol,
         name=asset.ast_name,
         type=asset.ast_type,
-        is_active=asset.ast_is_active,
+        yahoo_type=asset.ast_yahoo_type,
+        exchange=asset.ast_exchange,
+        currency=asset.ast_currency,
+        country=asset.ast_country,
+        is_tracked=asset.ast_is_tracked,
         created_at=asset.ast_created_at,
+        updated_at=asset.ast_updated_at,
     )
 
     if asset.ast_type == "stock":
         stock = await db.get(Stock, asset.ast_id)
 
         if stock is not None:
-            item.exchange = stock.sto_exchange
             item.sector = stock.sto_sector
             item.industry = stock.sto_industry
 
@@ -58,6 +62,8 @@ async def create_asset_item(
         crypto = await db.get(Crypto, asset.ast_id)
 
         if crypto is not None:
+            item.base_currency = crypto.cry_base_currency
+            item.quote_currency = crypto.cry_quote_currency
             item.blockchain = crypto.cry_blockchain
             item.contract_address = crypto.cry_contract_address
 
@@ -68,14 +74,16 @@ async def create_asset_item(
             item.base_currency = forex.for_base_currency
             item.quote_currency = forex.for_quote_currency
 
-    elif asset.ast_type == "commodity":
-        commodity = await db.get(Commodity, asset.ast_id)
+    elif asset.ast_type == "future":
+        future = await db.get(Future, asset.ast_id)
 
-        if commodity is not None:
-            item.unit = commodity.com_unit
+        if future is not None:
+            item.underlying_name = future.fut_underlying_name
+            item.underlying_type = future.fut_underlying_type
+            item.unit = future.fut_unit
             item.contract_size = (
-                float(commodity.com_contract_size)
-                if commodity.com_contract_size is not None
+                float(future.fut_contract_size)
+                if future.fut_contract_size is not None
                 else None
             )
 
@@ -187,10 +195,7 @@ def history_options() -> dict[str, list[str]]:
         for period, intervals in ALLOWED_PERIOD_INTERVALS.items()
     }
 
-@router.post(
-    "/assets/sync-all",
-    response_model=AssetSyncResponse,
-)
+@router.post("/assets/sync-all", response_model=AssetSyncResponse)
 async def synchronize_all_assets(
     db: DbSession,
 ) -> AssetSyncResponse:

@@ -9,7 +9,6 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
-    UniqueConstraint,
     func,
 )
 
@@ -100,15 +99,26 @@ class Asset(Base):
         nullable=False,
     )
 
-    ast_is_active: Mapped[bool] = mapped_column(
+    ast_yahoo_type: Mapped[str | None] = mapped_column(String)
+    ast_exchange: Mapped[str | None] = mapped_column(String)
+    ast_currency: Mapped[str | None] = mapped_column(String)
+    ast_country: Mapped[str | None] = mapped_column(String)
+
+    ast_is_tracked: Mapped[bool] = mapped_column(
         Boolean,
-        default=True,
-        server_default="true",
+        default=False,
+        server_default="false",
         nullable=False,
     )
 
     ast_created_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    ast_updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
     )
@@ -150,11 +160,6 @@ class Stock(Base):
         primary_key=True,
     )
 
-    sto_exchange: Mapped[str] = mapped_column(
-        String,
-        nullable=False,
-    )
-
     sto_sector: Mapped[str | None] = mapped_column(String)
 
     sto_industry: Mapped[str | None] = mapped_column(String)
@@ -171,6 +176,10 @@ class Crypto(Base):
         ForeignKey("assets.ast_id"),
         primary_key=True,
     )
+
+    cry_base_currency: Mapped[str | None] = mapped_column(String)
+
+    cry_quote_currency: Mapped[str | None] = mapped_column(String)
 
     cry_blockchain: Mapped[str | None] = mapped_column(String)
 
@@ -201,20 +210,24 @@ class Forex(Base):
 
 
 # ============================================================
-# COMMODITIES
+# FUTURES
 # ============================================================
 
-class Commodity(Base):
-    __tablename__ = "commodities"
+class Future(Base):
+    __tablename__ = "futures"
 
-    com_ast_id: Mapped[int] = mapped_column(
+    fut_ast_id: Mapped[int] = mapped_column(
         ForeignKey("assets.ast_id"),
         primary_key=True,
     )
 
-    com_unit: Mapped[str | None] = mapped_column(String)
+    fut_underlying_name: Mapped[str | None] = mapped_column(String)
 
-    com_contract_size: Mapped[Decimal | None] = mapped_column(
+    fut_underlying_type: Mapped[str | None] = mapped_column(String)
+
+    fut_unit: Mapped[str | None] = mapped_column(String)
+
+    fut_contract_size: Mapped[Decimal | None] = mapped_column(
         Numeric(18, 2)
     )
 
@@ -234,6 +247,7 @@ class Portfolio(Base):
 
     prt_usr_id: Mapped[int] = mapped_column(
         ForeignKey("users.usr_id"),
+        unique=True,
         nullable=False,
     )
 
@@ -306,6 +320,20 @@ class PortfolioAsset(Base):
         primary_key=True,
     )
 
+    pas_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(18, 8),
+        default=Decimal("0"),
+        server_default="0",
+        nullable=False,
+    )
+
+    pas_average_purchase_price: Mapped[Decimal] = mapped_column(
+        Numeric(18, 8),
+        default=Decimal("0"),
+        server_default="0",
+        nullable=False,
+    )
+
     pas_is_active: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
@@ -315,6 +343,65 @@ class PortfolioAsset(Base):
 
     pas_created_at: Mapped[datetime] = mapped_column(
         DateTime,
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    pas_updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
+# ============================================================
+# TRANSACTIONS
+# ============================================================
+
+class Transaction(Base):
+    """Un achat ou une vente effectué dans un portefeuille."""
+
+    __tablename__ = "transactions"
+
+    id_trans: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    prt_id_trans: Mapped[int] = mapped_column(
+        ForeignKey("portfolios.prt_id"),
+        nullable=False,
+    )
+
+    ast_id_trans: Mapped[int] = mapped_column(
+        ForeignKey("assets.ast_id"),
+        nullable=False,
+    )
+
+    type_trans: Mapped[str] = mapped_column(String(10), nullable=False)
+    quantity_trans: Mapped[Decimal] = mapped_column(
+        Numeric(18, 8),
+        nullable=False,
+    )
+    price_trans: Mapped[Decimal] = mapped_column(
+        Numeric(18, 8),
+        nullable=False,
+    )
+    fees_trans: Mapped[Decimal] = mapped_column(
+        Numeric(18, 8),
+        default=Decimal("0"),
+        server_default="0",
+        nullable=False,
+    )
+    currency_trans: Mapped[str] = mapped_column(
+        String(10),
+        default="USD",
+        server_default="USD",
+        nullable=False,
+    )
+    createdAt_trans: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
     )
@@ -371,70 +458,6 @@ class Prompt(Base):
         server_default=func.now(),
         nullable=False,
     )
-
-
-# ============================================================
-# MARKET DATA
-# ============================================================
-
-class MarketData(Base):
-    __tablename__ = "market_data"
-
-    __table_args__ = (
-        UniqueConstraint(
-            "mkt_ast_id",
-            "mkt_timeframe",
-            "mkt_timestamp",
-            name="uq_market_data_asset_timeframe_timestamp",
-        ),
-    )
-
-    mkt_id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
-
-    mkt_ast_id: Mapped[int] = mapped_column(
-        ForeignKey("assets.ast_id"),
-        nullable=False,
-    )
-
-    mkt_timeframe: Mapped[str] = mapped_column(
-        String,
-        nullable=False,
-    )
-
-    mkt_open: Mapped[Decimal] = mapped_column(
-        Numeric(18, 8),
-        nullable=False,
-    )
-
-    mkt_high: Mapped[Decimal] = mapped_column(
-        Numeric(18, 8),
-        nullable=False,
-    )
-
-    mkt_low: Mapped[Decimal] = mapped_column(
-        Numeric(18, 8),
-        nullable=False,
-    )
-
-    mkt_close: Mapped[Decimal] = mapped_column(
-        Numeric(18, 8),
-        nullable=False,
-    )
-
-    mkt_volume: Mapped[Decimal | None] = mapped_column(
-        Numeric(18, 8)
-    )
-
-    mkt_timestamp: Mapped[datetime] = mapped_column(
-        DateTime,
-        nullable=False,
-    )
-
-    mkt_source: Mapped[str | None] = mapped_column(String)
 
 
 # ============================================================
