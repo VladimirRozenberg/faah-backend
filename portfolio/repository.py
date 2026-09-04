@@ -1,5 +1,7 @@
 """Fonctions qui gèrent le portefeuille dans PostgreSQL."""
 
+import asyncio
+
 from datetime import datetime
 from decimal import Decimal
 
@@ -67,18 +69,22 @@ async def get_user_portfolio(db: AsyncSession, user_id: int) -> Portfolio:
     return portfolio
 
 
-async def get_current_price(symbol: str) -> float | None:
+async def get_current_price(asset: Asset) -> float | None:
     """Cherche le prix dans Redis, puis dans yfinance."""
 
     try:
-        quote = await get_latest_quote(symbol)
+        quote = await get_latest_quote(asset.ast_symbol)
         if quote is not None:
             return quote.price
     except Exception:
         pass
 
     try:
-        return market_data_service.get_asset(symbol).last_price
+        market_asset = await asyncio.to_thread(
+            market_data_service.get_asset,
+            asset,
+        )
+        return market_asset.last_price
     except Exception:
         return None
 
@@ -225,7 +231,7 @@ async def create_position_response(
     quantity = float(position.pas_quantity)
     average_price = float(position.pas_average_purchase_price)
     invested = quantity * average_price
-    current_price = await get_current_price(asset.ast_symbol)
+    current_price = await get_current_price(asset)
     current_value = None
     profit = None
     profit_percent = None

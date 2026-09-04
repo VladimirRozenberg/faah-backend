@@ -1,286 +1,252 @@
-"""Vérification et enregistrement du catalogue dans PostgreSQL."""
+"""Création des actifs détectés dans les actualités."""
 
+import asyncio
 from datetime import datetime, timezone
-from decimal import Decimal
 
 import yfinance as yf
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from assets.catalog import ASSET_CATALOG
-from models import Asset, Crypto, Forex, Future, Stock
+from assets.schemas import DetectedAsset
+from models import (
+    Asset,
+    ClassificationAsset,
+    Crypto,
+    Forex,
+    Future,
+    Stock,
+)
+
+
+# Yahoo utilise ses propres noms de types. FAAH utilise des noms plus simples.
+YAHOO_TYPES = {
+    "EQUITY": "stock",
+    "CRYPTOCURRENCY": "crypto",
+    "CURRENCY": "forex",
+    "FUTURE": "future",
+}
 
 
 def get_yahoo_information(symbol: str) -> dict | None:
-    """Récupère seulement les informations Yahoo utiles à notre base."""
+    """Vérifie un symbole et garde seulement les données utiles."""
 
     try:
         information = yf.Ticker(symbol).get_info()
-
-        if not information.get("quoteType"):
-            return None
-
-        return {
-            "yahoo_type": information.get("quoteType"),
-            "exchange": information.get("exchange"),
-            "currency": information.get("currency"),
-            "country": information.get("country"),
-            "sector": information.get("sector"),
-            "industry": information.get("industry"),
-        }
     except Exception:
         return None
 
+    if not isinstance(information, dict):
+        return None
 
-async def sync_specific_asset(
+    raw_yahoo_type = information.get("quoteType")
+    yahoo_type = str(raw_yahoo_type).upper() if raw_yahoo_type else None
+    asset_type = YAHOO_TYPES.get(yahoo_type)
+
+    # Un type absent ou non prévu par notre base est ignoré.
+    if asset_type is None:
+        return None
+
+    yahoo_symbol = str(information.get("symbol") or symbol).upper()
+
+    # La table forex a besoin d'une paire comme EURUSD=X.
+    if asset_type == "forex":
+        forex_pair = yahoo_symbol.removesuffix("=X")
+        if len(forex_pair) != 6:
+            return None
+
+    return {
+        "symbol": yahoo_symbol,
+        "name": (
+            information.get("longName")
+            or information.get("shortName")
+            or symbol
+        ),
+        "type": asset_type,
+        "yahoo_type": yahoo_type,
+        "exchange": information.get("exchange"),
+        "currency": information.get("currency"),
+        "country": information.get("country"),
+        "sector": information.get("sector"),
+        "industry": information.get("industry"),
+    }
+
+
+def split_crypto_symbol(symbol: str) -> tuple[str | None, str | None]:
+    """Transforme BTC-USD en BTC et USD."""
+
+    if "-" not in symbol:
+        return None, None
+
+    base, quote = symbol.rsplit("-", 1)
+    return base, quote
+
+
+def split_forex_symbol(symbol: str) -> tuple[str | None, str | None]:
+    """Transforme EURUSD=X en EUR et USD."""
+
+    clean_symbol = symbol.removesuffix("=X")
+
+    if len(clean_symbol) != 6:
+        return None, None
+
+    return clean_symbol[:3], clean_symbol[3:]
+
+
+async def create_specific_row(
     db: AsyncSession,
     asset: Asset,
-    asset_type: str,
     information: dict,
-    yahoo_information: dict,
-) -> bool:
-    """Crée ou actualise la ligne dans la table spécialisée."""
+) -> None:
+    """Crée la ligne stock, crypto, forex ou future si elle manque."""
 
-    if asset_type == "stock":
+    if asset.ast_type == "stock":
         row = await db.get(Stock, asset.ast_id)
-
         if row is None:
             db.add(
                 Stock(
                     sto_ast_id=asset.ast_id,
-                    sto_sector=yahoo_information["sector"],
-                    sto_industry=yahoo_information["industry"],
+                    sto_sector=information["sector"],
+                    sto_industry=information["industry"],
                 )
             )
-            return True
+        else:
+            row.sto_sector = information["sector"]
+            row.sto_industry = information["industry"]
 
-        has_changed = False
-
-        if row.sto_sector != yahoo_information["sector"]:
-            row.sto_sector = yahoo_information["sector"]
-            has_changed = True
-
-        if row.sto_industry != yahoo_information["industry"]:
-            row.sto_industry = yahoo_information["industry"]
-            has_changed = True
-
-        return has_changed
-
-    elif asset_type == "crypto":
+    elif asset.ast_type == "crypto":
         row = await db.get(Crypto, asset.ast_id)
-
         if row is None:
+            base, quote = split_crypto_symbol(asset.ast_symbol)
             db.add(
                 Crypto(
                     cry_ast_id=asset.ast_id,
-                    cry_base_currency=information["base"],
-                    cry_quote_currency=information["quote"],
-                    cry_blockchain=information["blockchain"],
+                    cry_base_currency=base,
+                    cry_quote_currency=quote,
+                    cry_blockchain=None,
                     cry_contract_address=None,
                 )
             )
-            return True
+        else:
+            base, quote = split_crypto_symbol(asset.ast_symbol)
+            row.cry_base_currency = base
+            row.cry_quote_currency = quote
 
-        has_changed = False
-
-        if row.cry_base_currency != information["base"]:
-            row.cry_base_currency = information["base"]
-            has_changed = True
-
-        if row.cry_quote_currency != information["quote"]:
-            row.cry_quote_currency = information["quote"]
-            has_changed = True
-
-        if row.cry_blockchain != information["blockchain"]:
-            row.cry_blockchain = information["blockchain"]
-            has_changed = True
-
-        return has_changed
-
-    elif asset_type == "forex":
+    elif asset.ast_type == "forex":
         row = await db.get(Forex, asset.ast_id)
-
         if row is None:
+            base, quote = split_forex_symbol(asset.ast_symbol)
+
+            # La table forex exige ces deux valeurs.
+            if base is None or quote is None:
+                return
+
             db.add(
                 Forex(
                     for_ast_id=asset.ast_id,
-                    for_base_currency=information["base"],
-                    for_quote_currency=information["quote"],
+                    for_base_currency=base,
+                    for_quote_currency=quote,
                 )
             )
-            return True
+        else:
+            base, quote = split_forex_symbol(asset.ast_symbol)
+            if base is not None and quote is not None:
+                row.for_base_currency = base
+                row.for_quote_currency = quote
 
-        has_changed = False
-
-        if row.for_base_currency != information["base"]:
-            row.for_base_currency = information["base"]
-            has_changed = True
-
-        if row.for_quote_currency != information["quote"]:
-            row.for_quote_currency = information["quote"]
-            has_changed = True
-
-        return has_changed
-
-    elif asset_type == "future":
+    elif asset.ast_type == "future":
         row = await db.get(Future, asset.ast_id)
-        contract_size = Decimal(str(information["contract_size"]))
-
         if row is None:
             db.add(
                 Future(
                     fut_ast_id=asset.ast_id,
-                    fut_underlying_name=information["name"],
-                    fut_underlying_type=information["underlying_type"],
-                    fut_unit=information["unit"],
-                    fut_contract_size=contract_size,
+                    fut_underlying_name=asset.ast_name,
+                    fut_underlying_type=None,
+                    fut_unit=None,
+                    fut_contract_size=None,
                 )
             )
-            return True
-
-        has_changed = False
-
-        if row.fut_underlying_name != information["name"]:
-            row.fut_underlying_name = information["name"]
-            has_changed = True
-
-        if row.fut_underlying_type != information["underlying_type"]:
-            row.fut_underlying_type = information["underlying_type"]
-            has_changed = True
-
-        if row.fut_unit != information["unit"]:
-            row.fut_unit = information["unit"]
-            has_changed = True
-
-        if row.fut_contract_size != contract_size:
-            row.fut_contract_size = contract_size
-            has_changed = True
-
-        return has_changed
-
-    else:
-        raise ValueError(f"Type d'actif inconnu : {asset_type}")
-
-    return False
+        else:
+            row.fut_underlying_name = asset.ast_name
 
 
-async def sync_all_assets(db: AsyncSession) -> dict[str, int]:
-    """Crée ou actualise tous les actifs du catalogue."""
+async def save_detected_assets(
+    db: AsyncSession,
+    classification_id: int,
+    detected_assets: list[DetectedAsset],
+) -> list[Asset]:
+    """Vérifie les symboles, crée les actifs et les relie à la classification."""
 
-    created = 0
-    updated = 0
-    unchanged = 0
-    unavailable = 0
-    total = 0
+    saved_assets = []
+    used_symbols = set()
 
-    try:
-        for asset_type, assets in ASSET_CATALOG.items():
-            total += len(assets)
+    for detected in detected_assets[:10]:
+        requested_symbol = detected.symbol.strip().upper()
 
-            for symbol, information in assets.items():
-                yahoo_information = get_yahoo_information(symbol)
+        if not requested_symbol or requested_symbol in used_symbols:
+            continue
 
-                if yahoo_information is None:
-                    unavailable += 1
-                    continue
+        used_symbols.add(requested_symbol)
 
-                asset = await db.scalar(
-                    select(Asset).where(Asset.ast_symbol == symbol)
+        # yfinance est synchrone : to_thread évite de bloquer toute l'API.
+        information = await asyncio.to_thread(
+            get_yahoo_information,
+            requested_symbol,
+        )
+
+        if information is None:
+            continue
+
+        symbol = information["symbol"]
+        asset = await db.scalar(
+            select(Asset).where(Asset.ast_symbol == symbol)
+        )
+
+        if asset is None:
+            asset = Asset(
+                ast_symbol=symbol,
+                ast_name=information["name"],
+                ast_type=information["type"],
+                ast_yahoo_type=information["yahoo_type"],
+                ast_exchange=information["exchange"],
+                ast_currency=information["currency"],
+                ast_country=information["country"],
+                ast_is_tracked=True,
+            )
+            db.add(asset)
+            await db.flush()
+        else:
+            if asset.ast_type != information["type"]:
+                continue
+
+            asset.ast_name = information["name"]
+            asset.ast_yahoo_type = information["yahoo_type"]
+            asset.ast_exchange = information["exchange"]
+            asset.ast_currency = information["currency"]
+            asset.ast_country = information["country"]
+            asset.ast_is_tracked = True
+            asset.ast_updated_at = datetime.now(timezone.utc)
+
+        await create_specific_row(db, asset, information)
+
+        link = await db.get(
+            ClassificationAsset,
+            (classification_id, asset.ast_id),
+        )
+
+        if link is None:
+            db.add(
+                ClassificationAsset(
+                    cla_cls_id=classification_id,
+                    cla_ast_id=asset.ast_id,
+                    cla_relevance_confidence=detected.confidence,
+                    cla_reason=detected.reason,
                 )
+            )
+        else:
+            link.cla_relevance_confidence = detected.confidence
+            link.cla_reason = detected.reason
 
-                if asset is None:
-                    asset = Asset(
-                        ast_symbol=symbol,
-                        ast_name=information["name"],
-                        ast_type=asset_type,
-                        ast_yahoo_type=yahoo_information["yahoo_type"],
-                        ast_exchange=(
-                            yahoo_information["exchange"]
-                            or information.get("exchange")
-                        ),
-                        ast_currency=(
-                            yahoo_information["currency"]
-                            or information.get("quote")
-                        ),
-                        ast_country=yahoo_information["country"],
-                        ast_is_tracked=True,
-                    )
-                    db.add(asset)
+        saved_assets.append(asset)
 
-                    # Récupère asset.ast_id avant le commit.
-                    await db.flush()
-
-                    await sync_specific_asset(
-                        db,
-                        asset,
-                        asset_type,
-                        information,
-                        yahoo_information,
-                    )
-                    created += 1
-                    continue
-
-                if asset.ast_type != asset_type:
-                    raise ValueError(
-                        f"{symbol} existe déjà avec le type "
-                        f"{asset.ast_type}, et non {asset_type}."
-                    )
-
-                has_changed = False
-
-                if asset.ast_name != information["name"]:
-                    asset.ast_name = information["name"]
-                    has_changed = True
-
-                yahoo_exchange = (
-                    yahoo_information["exchange"]
-                    or information.get("exchange")
-                )
-                yahoo_currency = (
-                    yahoo_information["currency"]
-                    or information.get("quote")
-                )
-
-                if asset.ast_yahoo_type != yahoo_information["yahoo_type"]:
-                    asset.ast_yahoo_type = yahoo_information["yahoo_type"]
-                    has_changed = True
-
-                if asset.ast_exchange != yahoo_exchange:
-                    asset.ast_exchange = yahoo_exchange
-                    has_changed = True
-
-                if asset.ast_currency != yahoo_currency:
-                    asset.ast_currency = yahoo_currency
-                    has_changed = True
-
-                if asset.ast_country != yahoo_information["country"]:
-                    asset.ast_country = yahoo_information["country"]
-                    has_changed = True
-
-                specific_changed = await sync_specific_asset(
-                    db,
-                    asset,
-                    asset_type,
-                    information,
-                    yahoo_information,
-                )
-
-                if has_changed or specific_changed:
-                    asset.ast_updated_at = datetime.now(timezone.utc)
-                    updated += 1
-                else:
-                    unchanged += 1
-
-        await db.commit()
-
-        return {
-            "created": created,
-            "updated": updated,
-            "unchanged": unchanged,
-            "unavailable": unavailable,
-            "total": total,
-        }
-
-    except Exception:
-        await db.rollback()
-        raise
+    await db.commit()
+    return saved_assets

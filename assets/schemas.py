@@ -2,7 +2,15 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class DetectedAsset(BaseModel):
+    """Un symbole Yahoo Finance trouvé par DeepSeek."""
+
+    symbol: str = Field(min_length=1, max_length=30)
+    confidence: int = Field(ge=0, le=100)
+    reason: str
 
 
 class AssetSummary(BaseModel):
@@ -87,13 +95,3 @@ class CandleResponse(BaseModel):
     candles: list[Candle]
     retrieved_at: datetime
     source: str = "Yahoo Finance via yfinance"
-
-
-class AssetSyncResponse(BaseModel):
-    """Résultat de la synchronisation du catalogue d'actifs."""
-
-    created: int
-    updated: int
-    unchanged: int
-    unavailable: int
-    total: int

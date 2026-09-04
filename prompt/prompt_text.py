@@ -15,6 +15,8 @@ import logging
 from typing import Literal
 from pydantic import BaseModel
 
+from assets.detection import detect_and_save_assets
+
 
 client=AsyncOpenAI(
     api_key="sk-ad460ae7b7ae4bcfbd1e637eb33c5771",
@@ -147,6 +149,13 @@ async def classify_source(source_id: int, db: DbSession):
     classification_id = db_classification.cls_id
 
     if db_classification.cls_should_trigger:
+        await detect_and_save_assets(
+            source,
+            db_classification,
+            db,
+            client,
+        )
+
         for attempt in range(1, 4):
             try:
                 db_analysis = await analyze_source(

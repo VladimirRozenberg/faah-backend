@@ -12,8 +12,8 @@ from time import monotonic
 import pandas as pd
 import yfinance as yf
 
-from assets.catalog import ALL_ASSETS
 from assets.schemas import AssetSummary, Candle, CandleResponse
+from models import Asset
 
 
 # On limite les combinaisons afin d'éviter les requêtes invalides ou énormes.
@@ -25,10 +25,6 @@ ALLOWED_PERIOD_INTERVALS: dict[str, set[str]] = {
     "6mo": {"1d"},
     "1y": {"1d", "1wk"},
 }
-
-
-class UnknownSymbolError(ValueError):
-    """Le symbole demandé ne fait pas partie de notre catalogue."""
 
 
 class InvalidHistoryRequestError(ValueError):
@@ -85,14 +81,17 @@ class MarketDataService:
             return None
         return float(numbers.iloc[-1])
 
-    def get_assets(self) -> list[AssetSummary]:
-        """Retourne le prix et la variation des actifs du catalogue."""
+    def get_assets(self, database_assets: list[Asset]) -> list[AssetSummary]:
+        """Retourne le prix des actifs reçus depuis PostgreSQL."""
 
-        cached = self._read_cache("assets")
+        if not database_assets:
+            return []
+
+        symbols = [asset.ast_symbol for asset in database_assets]
+        cache_key = "assets:" + ",".join(sorted(symbols))
+        cached = self._read_cache(cache_key)
         if cached is not None:
             return cached  # type: ignore[return-value]
-
-        symbols = list(ALL_ASSETS)
 
         try:
             daily_data = yf.download(
@@ -124,7 +123,8 @@ class MarketDataService:
         retrieved_at = datetime.now(timezone.utc)
         assets: list[AssetSummary] = []
 
-        for symbol, metadata in ALL_ASSETS.items():
+        for database_asset in database_assets:
+            symbol = database_asset.ast_symbol
             daily = self._symbol_frame(daily_data, symbol)
             intraday = self._symbol_frame(intraday_data, symbol)
 
@@ -158,10 +158,10 @@ class MarketDataService:
             assets.append(
                 AssetSummary(
                     symbol=symbol,
-                    name=metadata["name"],
-                    type=metadata["type"],
-                    exchange=metadata.get("exchange"),
-                    currency=metadata.get("quote", "USD"),
+                    name=database_asset.ast_name,
+                    type=database_asset.ast_type,
+                    exchange=database_asset.ast_exchange,
+                    currency=database_asset.ast_currency or "USD",
                     last_price=round(last_price, 4),
                     previous_close=round(previous_close, 4),
                     change=round(change, 4),
@@ -176,30 +176,26 @@ class MarketDataService:
                 "Aucun actif n'a retourné un cours exploitable."
             )
 
-        self._write_cache("assets", assets)
+        self._write_cache(cache_key, assets)
         return assets
 
-    def get_asset(self, symbol: str) -> AssetSummary:
-        normalized_symbol = symbol.upper()
-        if normalized_symbol not in ALL_ASSETS:
-            raise UnknownSymbolError(normalized_symbol)
+    def get_asset(self, database_asset: Asset) -> AssetSummary:
+        """Retourne le prix d'un actif enregistré dans PostgreSQL."""
 
-        asset = next(
-            (item for item in self.get_assets() if item.symbol == normalized_symbol),
-            None,
-        )
-        if asset is None:
+        items = self.get_assets([database_asset])
+
+        if not items:
             raise MarketDataUnavailableError(
-                f"Aucun cours n'est actuellement disponible pour {normalized_symbol}."
+                "Aucun cours n'est actuellement disponible pour "
+                f"{database_asset.ast_symbol}."
             )
-        return asset
+
+        return items[0]
 
     def get_candles(
         self, symbol: str, period: str = "1d", interval: str = "5m"
     ) -> CandleResponse:
         normalized_symbol = symbol.upper()
-        if normalized_symbol not in ALL_ASSETS:
-            raise UnknownSymbolError(normalized_symbol)
 
         allowed_intervals = ALLOWED_PERIOD_INTERVALS.get(period)
         if allowed_intervals is None or interval not in allowed_intervals:

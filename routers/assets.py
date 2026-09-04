@@ -1,15 +1,15 @@
 """Routes HTTP liées aux actifs et à leur historique."""
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from assets.repository import sync_all_assets
 from assets.market_data import (
     ALLOWED_PERIOD_INTERVALS,
     InvalidHistoryRequestError,
     MarketDataUnavailableError,
-    UnknownSymbolError,
     market_data_service,
 )
 
@@ -17,7 +17,6 @@ from assets.schemas import (
     AssetItem,
     AssetListResponse,
     AssetSummary,
-    AssetSyncResponse,
     CandleResponse,
     MarketListResponse,
 )
@@ -93,11 +92,6 @@ async def create_asset_item(
 def raise_http_error(error: Exception) -> None:
     """Convertit les erreurs du service en réponses HTTP compréhensibles."""
 
-    if isinstance(error, UnknownSymbolError):
-        raise HTTPException(
-            status_code=404,
-            detail=f"Le symbole {error} ne fait pas partie du catalogue.",
-        ) from error
     if isinstance(error, InvalidHistoryRequestError):
         raise HTTPException(status_code=400, detail=str(error)) from error
     if isinstance(error, MarketDataUnavailableError):
@@ -127,11 +121,20 @@ async def list_assets(db: DbSession) -> AssetListResponse:
 
 
 @router.get("/market", response_model=MarketListResponse)
-def list_market() -> MarketListResponse:
+async def list_market(db: DbSession) -> MarketListResponse:
     """Retourne les prix des actifs avec yfinance."""
 
     try:
-        items = market_data_service.get_assets()
+        result = await db.execute(
+            select(Asset)
+            .where(Asset.ast_is_tracked.is_(True))
+            .order_by(Asset.ast_type, Asset.ast_name)
+        )
+        database_assets = list(result.scalars().all())
+        items = await asyncio.to_thread(
+            market_data_service.get_assets,
+            database_assets,
+        )
         return MarketListResponse(
             count=len(items),
             items=items,
@@ -161,26 +164,48 @@ async def get_asset(symbol: str, db: DbSession) -> AssetItem:
 
 
 @router.get("/assets/{symbol}/market", response_model=AssetSummary)
-def get_asset_market(symbol: str) -> AssetSummary:
+async def get_asset_market(symbol: str, db: DbSession) -> AssetSummary:
     """Retourne le prix et la variation d'un actif avec yfinance."""
 
+    symbol = symbol.upper()
+    asset = await db.scalar(
+        select(Asset).where(Asset.ast_symbol == symbol)
+    )
+
+    if asset is None:
+        raise HTTPException(status_code=404, detail=f"L'actif {symbol} n'existe pas.")
+
     try:
-        return market_data_service.get_asset(symbol)
+        return await asyncio.to_thread(market_data_service.get_asset, asset)
     except Exception as error:
         raise_http_error(error)
         raise
 
 
 @router.get("/assets/{symbol}/candles", response_model=CandleResponse)
-def get_asset_candles(
+async def get_asset_candles(
     symbol: str,
+    db: DbSession,
     period: str = Query(default="1d", description="Exemples : 1d, 5d, 1mo, 1y"),
     interval: str = Query(default="5m", description="Exemples : 1m, 5m, 1h, 1d"),
 ) -> CandleResponse:
     """Retourne les bougies OHLCV qui serviront au graphique Avalonia."""
 
+    symbol = symbol.upper()
+    asset = await db.scalar(
+        select(Asset).where(Asset.ast_symbol == symbol)
+    )
+
+    if asset is None:
+        raise HTTPException(status_code=404, detail=f"L'actif {symbol} n'existe pas.")
+
     try:
-        return market_data_service.get_candles(symbol, period, interval)
+        return await asyncio.to_thread(
+            market_data_service.get_candles,
+            symbol,
+            period,
+            interval,
+        )
     except Exception as error:
         raise_http_error(error)
         raise
@@ -194,25 +219,3 @@ def history_options() -> dict[str, list[str]]:
         period: sorted(intervals)
         for period, intervals in ALLOWED_PERIOD_INTERVALS.items()
     }
-
-@router.post("/assets/sync-all", response_model=AssetSyncResponse)
-async def synchronize_all_assets(
-    db: DbSession,
-) -> AssetSyncResponse:
-    """Enregistre les actifs dans leur table générale et spécialisée."""
-
-    try:
-        result = await sync_all_assets(db)
-    except ValueError as error:
-        raise HTTPException(
-            status_code=409,
-            detail=str(error),
-        ) from error
-
-    return AssetSyncResponse(
-        created=result["created"],
-        updated=result["updated"],
-        unchanged=result["unchanged"],
-        unavailable=result["unavailable"],
-        total=result["total"],
-    )
