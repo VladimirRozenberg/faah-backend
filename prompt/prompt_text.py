@@ -148,14 +148,13 @@ async def classify_source(source_id: int, db: DbSession):
 
     classification_id = db_classification.cls_id
 
-    if db_classification.cls_should_trigger:
-        await detect_and_save_assets(
-            source,
-            db_classification,
-            db,
-            client,
-        )
+    await detect_and_save_assets(
+        db_classification,
+        db,
+        client,
+    )
 
+    if db_classification.cls_should_trigger:
         for attempt in range(1, 4):
             try:
                 db_analysis = await analyze_source(

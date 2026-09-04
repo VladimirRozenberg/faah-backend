@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from assets.repository import save_detected_assets
 from assets.schemas import DetectedAsset
-from models import Asset, DataSource, SourceClassification
+from models import Asset, SourceClassification
 
 
 logger = logging.getLogger(__name__)
@@ -23,13 +23,12 @@ class AssetDetectionResult(BaseModel):
 
 
 def generate_asset_detection_prompt(
-    source: DataSource,
     classification: SourceClassification,
 ) -> str:
-    """Construit le prompt utilisé uniquement pour trouver les symboles."""
+    """Construit le prompt à partir du résumé de la classification."""
 
     return f"""
-You identify financial assets affected by a verified financial news article.
+You identify financial assets from a financial classification summary.
 
 Return ONLY valid JSON using EXACTLY this structure:
 
@@ -57,25 +56,21 @@ Rules:
 
 CLASSIFICATION REASON:
 {classification.cls_reason}
-
-SOURCE TITLE:
-{source.src_title}
-
-SOURCE CONTENT:
-{source.src_content}
 """
 
 
 async def detect_and_save_assets(
-    source: DataSource,
     classification: SourceClassification,
     db: AsyncSession,
     client: AsyncOpenAI,
 ) -> list[Asset]:
-    """Demande les symboles à DeepSeek puis les enregistre."""
+    """Vérifie le trigger, trouve les symboles puis les enregistre."""
+
+    if not classification.cls_should_trigger:
+        return []
 
     try:
-        prompt = generate_asset_detection_prompt(source, classification)
+        prompt = generate_asset_detection_prompt(classification)
 
         response = await client.responses.create(
             model="deepseek-v4-flash",
