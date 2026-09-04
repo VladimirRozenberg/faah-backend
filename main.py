@@ -1,12 +1,9 @@
 from fastapi import FastAPI
 from sqlalchemy import text, select
-<<<<<<< HEAD
 import os
 from routers import assets, health
-=======
 
 from routers import assets, health, live_market
->>>>>>> f759f7d (improved classification with regards to date of the news)
 import prompt.prompts as prompts
 from prompt import prompt_text
 from db import DbSession
