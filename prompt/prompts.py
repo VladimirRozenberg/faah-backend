@@ -13,6 +13,7 @@ from prompt.price_context import (
     PriceContextUnavailableError,
     get_price_context,
 )
+from prompt.niche_assignment import assign_niches_to_all_assets
 from prompt import prompt_text as prompts
 from db import DbSession
 from pydantic import BaseModel, Field
@@ -31,6 +32,29 @@ class AssetDetectionTestRequest(BaseModel):
 async def classify_source_endpoint(source_id: int, db: DbSession):
     classification = await prompts.classify_source(source_id, db)
     return classification
+
+
+@router.get("/assign-asset-niches")
+async def assign_asset_niches_endpoint(db: DbSession):
+    """Classe tous les actifs dans les niches disponibles."""
+
+    try:
+        return await assign_niches_to_all_assets(db, prompts.client)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error),
+        ) from error
+    except Exception as error:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "message": "Asset niche assignment failed",
+                "error_type": type(error).__name__,
+                "error": str(error),
+            },
+        ) from error
 
 
 @router.get("/price-context/{symbol}", response_model=PriceContext)

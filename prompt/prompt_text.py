@@ -6,16 +6,31 @@ import db
 from sqlalchemy import select
 
 import json
+from decimal import Decimal
 
-from models import DataSource, Prompt, SourceClassification, Analysis, AnalysisSource
+from models import (
+    Analysis,
+    AnalysisAsset,
+    AnalysisSource,
+    Asset,
+    ClassificationAsset,
+    ClassificationNiche,
+    DataSource,
+    Niche,
+    Prompt,
+    Signal,
+    SourceClassification,
+)
 from db import DbSession
 from openai import AsyncOpenAI
 from datetime import datetime, timedelta, timezone
 import logging
 from typing import Literal
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import os
 from assets.detection import detect_and_save_assets
+from prompt.niche_assignment import format_niches_by_category
+from prompt.price_context import get_price_context
 
 
 client=AsyncOpenAI(
@@ -33,6 +48,58 @@ class ClassificationResult(BaseModel):
     cls_sentiment: str
     cls_reason: str
     cls_should_trigger: bool
+    niches: list[str] = Field(default_factory=list)
+
+
+class AnalysisSignalResult(BaseModel):
+    sig_asset_symbol: str = Field(min_length=1, max_length=50)
+    sig_action: Literal["buy", "sell", "hold"]
+    sig_entry_price: float | None = Field(default=None, gt=0)
+    sig_stop_loss_price: float | None = Field(default=None, gt=0)
+    sig_take_profit_price: float | None = Field(default=None, gt=0)
+    sig_confidence: int = Field(ge=0, le=100)
+    sig_timeframe: Literal[
+        "short-term",
+        "medium-term",
+        "long-term",
+        "multiple",
+    ]
+    sig_expires_at: None = None
+
+
+class AssetAnalysisResult(BaseModel):
+    symbol: str = Field(min_length=1, max_length=50)
+    direction: Literal["negative", "neutral", "positive", "mixed"]
+    confidence: int = Field(ge=0, le=100)
+    timeframe: Literal[
+        "short-term",
+        "medium-term",
+        "long-term",
+        "multiple",
+    ]
+    reason: str
+
+
+class FinancialAnalysisResult(BaseModel):
+    anl_response_text: str
+    anl_summary: str
+    anl_direction: Literal["negative", "neutral", "positive", "mixed"]
+    anl_market_sentiment: Literal[
+        "bearish",
+        "neutral",
+        "bullish",
+        "mixed",
+    ]
+    anl_confidence: int = Field(ge=0, le=100)
+    anl_risk_level: Literal["low", "medium", "high"]
+    anl_timeframe: Literal[
+        "short-term",
+        "medium-term",
+        "long-term",
+        "multiple",
+    ]
+    assets: list[AssetAnalysisResult] = Field(default_factory=list)
+    signals: list[AnalysisSignalResult] = Field(default_factory=list)
 
 
 def parse_classification(content: str | None) -> ClassificationResult:
@@ -78,7 +145,15 @@ async def classify_source(source_id: int, db: DbSession):
 
     source.src_is_processed = True
 
-    prompt_text = generate_classification_prompt(source)
+    niches = list(
+        (
+            await db.scalars(
+                select(Niche).order_by(Niche.nic_category, Niche.nic_name)
+            )
+        ).all()
+    )
+
+    prompt_text = generate_classification_prompt(source, niches)
 
 
 # Record exactly what was sent to the LLM
@@ -138,7 +213,33 @@ async def classify_source(source_id: int, db: DbSession):
     # Stage INSERT
     db.add(db_classification)
 
-    
+    await db.flush()
+
+    niches_by_name = {
+        niche.nic_name.casefold(): niche
+        for niche in niches
+    }
+    selected_niches = []
+    used_niche_ids = set()
+
+    for selected_name in classification.niches[:3]:
+        niche = niches_by_name.get(selected_name.strip().casefold())
+        if niche is not None and niche.nic_id not in used_niche_ids:
+            selected_niches.append(niche)
+            used_niche_ids.add(niche.nic_id)
+
+    if not selected_niches:
+        fallback = niches_by_name.get("other / unclassified")
+        if fallback is not None:
+            selected_niches = [fallback]
+
+    for niche in selected_niches:
+        db.add(
+            ClassificationNiche(
+                cln_cls_id=db_classification.cls_id,
+                cln_nic_id=niche.nic_id,
+            )
+        )
 
     # Execute transaction
     await db.commit()
@@ -190,7 +291,12 @@ async def classify_source(source_id: int, db: DbSession):
     return db_classification, db_analysis if db_classification.cls_should_trigger else "It's not a source that should trigger an analysis"
 
 
-def generate_classification_prompt(source: DataSource) -> str:
+def generate_classification_prompt(
+    source: DataSource,
+    niches: list[Niche],
+) -> str:
+
+    available_niches = format_niches_by_category(niches)
 
     return f"""
 You are a financial information classifier.
@@ -214,7 +320,8 @@ Return ONLY valid JSON using EXACTLY this structure:
     "cls_importance": "low | medium | high",
     "cls_sentiment": "negative | neutral | positive",
     "cls_reason": "short explanation",
-    "cls_should_trigger": true
+    "cls_should_trigger": true,
+    "niches": ["Exact niche name"]
     
 }}
 
@@ -250,12 +357,21 @@ The information in this article is fresh meaning it is not old news (published w
 
 If the source appears fabricated, generic, misleading, materially incomplete, or cannot be reasonably verified despite searching for a supposedly real and recent event, set cls_should_trigger to false.
 
+niches:
+Choose between 1 and 3 relevant niches from AVAILABLE NICHES below.
+Use only exact niche names from that list.
+Multiple niches are allowed only when each one clearly applies to the source.
+Use "Other / Unclassified" when no specific niche clearly applies.
+
 
 Do not add additional JSON fields.
 Do not include markdown.
 Do not include text before or after the JSON.
 Do not include any commentary or disclaimers.
 Do not write your promt in any language other than English.
+
+AVAILABLE NICHES:
+{available_niches}
 
 SOURCE TYPE:
 {source.src_type}
@@ -303,9 +419,15 @@ async def analyze_source(
             detail="Classification does not belong to this source",
         )
 
+    asset_context, linked_assets = await get_analysis_asset_context(
+        classification_id,
+        db,
+    )
+
     prompt_text = generate_analysis_prompt(
         source=source,
         classification=classification,
+        asset_context=asset_context,
     )
 
     # Record exactly what was sent to the LLM
@@ -350,7 +472,12 @@ async def analyze_source(
 
     content = response.output_text
 
-    analysis = json.loads(content)
+    if not content or not content.strip():
+        raise RuntimeError("DeepSeek returned empty analysis output")
+
+    analysis = FinancialAnalysisResult.model_validate(
+        json.loads(content, strict=False)
+    )
 
     db_analysis = Analysis(
         anl_prm_id=db_prompt.prm_id,
@@ -363,13 +490,13 @@ async def analyze_source(
         anl_trigger_type="classification",
         anl_trigger_reason=classification.cls_reason,
 
-        anl_response_text=analysis["anl_response_text"],
-        anl_summary=analysis["anl_summary"],
-        anl_direction=analysis["anl_direction"],
-        anl_market_sentiment=analysis["anl_market_sentiment"],
-        anl_confidence=analysis["anl_confidence"],
-        anl_risk_level=analysis["anl_risk_level"],
-        anl_timeframe=analysis["anl_timeframe"],
+        anl_response_text=analysis.anl_response_text,
+        anl_summary=analysis.anl_summary,
+        anl_direction=analysis.anl_direction,
+        anl_market_sentiment=analysis.anl_market_sentiment,
+        anl_confidence=analysis.anl_confidence,
+        anl_risk_level=analysis.anl_risk_level,
+        anl_timeframe=analysis.anl_timeframe,
     )
 
     db.add(db_analysis)
@@ -384,14 +511,238 @@ async def analyze_source(
 
     db.add(db_analysis_source)
 
+    analyzed_asset_ids = set()
+    for asset_analysis in analysis.assets:
+        linked = linked_assets.get(asset_analysis.symbol.strip().upper())
+        if linked is None:
+            logger.warning(
+                "Ignoring analysis for unlinked asset %s.",
+                asset_analysis.symbol,
+            )
+            continue
+
+        asset, price_context = linked
+        if asset.ast_id in analyzed_asset_ids:
+            logger.warning(
+                "Ignoring duplicate analysis for asset %s.",
+                asset.ast_symbol,
+            )
+            continue
+
+        analyzed_asset_ids.add(asset.ast_id)
+        db.add(
+            AnalysisAsset(
+                aas_anl_id=db_analysis.anl_id,
+                aas_ast_id=asset.ast_id,
+                aas_direction=asset_analysis.direction,
+                aas_confidence=asset_analysis.confidence,
+                aas_timeframe=asset_analysis.timeframe,
+                aas_reason=asset_analysis.reason,
+                aas_price_context=price_context,
+            )
+        )
+
+    assets_by_symbol = {
+        symbol: linked[0]
+        for symbol, linked in linked_assets.items()
+    }
+    signaled_asset_ids = set()
+
+    for generated_signal in analysis.signals:
+        symbol = generated_signal.sig_asset_symbol.strip().upper()
+        asset = assets_by_symbol.get(symbol)
+
+        if asset is None:
+            logger.warning(
+                "Ignoring signal for unlinked asset %s.",
+                symbol,
+            )
+            continue
+
+        if asset.ast_id in signaled_asset_ids:
+            logger.warning(
+                "Ignoring duplicate signal for asset %s.",
+                symbol,
+            )
+            continue
+
+        signaled_asset_ids.add(asset.ast_id)
+
+        entry_price = generated_signal.sig_entry_price
+        stop_loss_price = generated_signal.sig_stop_loss_price
+        take_profit_price = generated_signal.sig_take_profit_price
+
+        if generated_signal.sig_action == "hold":
+            entry_price = None
+            stop_loss_price = None
+            take_profit_price = None
+        else:
+            if generated_signal.sig_confidence < 70:
+                logger.warning(
+                    "Ignoring low-confidence %s signal for asset %s.",
+                    generated_signal.sig_action,
+                    symbol,
+                )
+                continue
+
+            _, price_context = linked_assets[symbol]
+            if entry_price is None and price_context is not None:
+                entry_price = price_context.get("current_price")
+
+            if not valid_signal_prices(
+                generated_signal.sig_action,
+                entry_price,
+                stop_loss_price,
+                take_profit_price,
+            ):
+                logger.warning(
+                    "Ignoring signal with invalid prices for asset %s.",
+                    symbol,
+                )
+                continue
+
+        db.add(
+            Signal(
+                sig_anl_id=db_analysis.anl_id,
+                sig_prt_id=None,
+                sig_ast_id=asset.ast_id,
+                sig_action=generated_signal.sig_action,
+                sig_entry_price=(
+                    Decimal(str(entry_price))
+                    if entry_price is not None
+                    else None
+                ),
+                sig_stop_loss_price=(
+                    Decimal(str(stop_loss_price))
+                    if stop_loss_price is not None
+                    else None
+                ),
+                sig_take_profit_price=(
+                    Decimal(str(take_profit_price))
+                    if take_profit_price is not None
+                    else None
+                ),
+                sig_confidence=generated_signal.sig_confidence,
+                sig_timeframe=generated_signal.sig_timeframe,
+                sig_status="active",
+                sig_expires_at=generated_signal.sig_expires_at,
+            )
+        )
+
     await db.commit()
     await db.refresh(db_analysis)
 
     return db_analysis
 
+
+async def get_analysis_asset_context(
+    classification_id: int,
+    db: DbSession,
+) -> tuple[str, dict[str, tuple[Asset, dict | None]]]:
+    """Return linked assets and their Yahoo Finance price context."""
+
+    asset_rows = (
+        await db.execute(
+            select(Asset, ClassificationAsset)
+            .join(
+                ClassificationAsset,
+                ClassificationAsset.cla_ast_id == Asset.ast_id,
+            )
+            .where(
+                ClassificationAsset.cla_cls_id == classification_id,
+                Asset.ast_is_tracked.is_(True),
+            )
+            .order_by(
+                ClassificationAsset.cla_relevance_confidence.desc(),
+                Asset.ast_symbol,
+            )
+        )
+    ).all()
+
+    if not asset_rows:
+        return "No assets are linked to this classification.", {}
+
+    async def load_context(asset: Asset) -> dict | None:
+        try:
+            context = await get_price_context(asset.ast_symbol)
+            return context.model_dump(mode="json")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "Price context unavailable for %s.",
+                asset.ast_symbol,
+            )
+            return None
+
+    price_contexts = await asyncio.gather(
+        *(load_context(asset) for asset, _ in asset_rows)
+    )
+
+    blocks = []
+    linked_assets = {}
+    for (asset, link), price_context in zip(asset_rows, price_contexts):
+        symbol = asset.ast_symbol.strip().upper()
+        linked_assets[symbol] = (asset, price_context)
+        blocks.append(
+            json.dumps(
+                {
+                    "symbol": asset.ast_symbol,
+                    "name": asset.ast_name,
+                    "type": asset.ast_type,
+                    "yahoo_type": asset.ast_yahoo_type,
+                    "exchange": asset.ast_exchange,
+                    "currency": asset.ast_currency,
+                    "country": asset.ast_country,
+                    "is_tracked": asset.ast_is_tracked,
+                    "classification_confidence": (
+                        link.cla_relevance_confidence
+                    ),
+                    "classification_reason": link.cla_reason,
+                    "price_context": (
+                        price_context
+                        if price_context is not None
+                        else "Unavailable from Yahoo Finance at analysis time"
+                    ),
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    return "\n".join(blocks), linked_assets
+
+
+def valid_signal_prices(
+    action: str,
+    entry: float | None,
+    stop_loss: float | None,
+    take_profit: float | None,
+) -> bool:
+    """Reject directional signals without an entry or with invalid levels."""
+
+    if entry is None or entry <= 0:
+        return False
+
+    if action == "buy":
+        if stop_loss is not None and stop_loss >= entry:
+            return False
+        if take_profit is not None and take_profit <= entry:
+            return False
+    elif action == "sell":
+        if stop_loss is not None and stop_loss <= entry:
+            return False
+        if take_profit is not None and take_profit >= entry:
+            return False
+    else:
+        return False
+
+    return True
+
+
 def generate_analysis_prompt(
     source: DataSource,
     classification: SourceClassification,
+    asset_context: str,
 ) -> str:
     return f"""
 You are a financial analyst performing a deeper analysis of information that
@@ -443,8 +794,25 @@ IMPORTANT:
   gaps with assumptions.
 - The classification sentiment and importance may be wrong. Independently
   determine the final direction, sentiment, risk, and confidence.
+- Use the supplied Yahoo Finance price context instead of searching for a
+  current price. Treat its timestamps and market-status fields carefully.
+- When the market is closed, current_price is the latest available price, not
+  a live open-market trade.
+- A price move around the article is context, not proof that the article
+  caused the move.
+- If price context is unavailable for an asset, preserve that uncertainty.
 - Do not provide personalized investment advice.
-- Do not recommend that anyone buy, sell, or hold an asset.
+- Trading signals are analytical labels for market-intelligence purposes, not
+  personalized investment recommendations or instructions to execute trades.
+- Assess every asset in LINKED ASSETS in the assets array.
+- Generate signals only for assets in LINKED ASSETS and copy each symbol
+  exactly as provided.
+- Generate at most one signal per asset.
+- Use buy or sell only for a clear directional thesis with signal confidence
+  of at least 70. Use hold for a materially relevant but non-actionable asset.
+- Return an empty signals array if no linked asset has a supported signal.
+- Never invent prices or false precision. Use supplied price context when
+  setting levels, and use null when a defensible level cannot be established.
 
 Return ONLY valid JSON using EXACTLY this structure:
 
@@ -455,7 +823,28 @@ Return ONLY valid JSON using EXACTLY this structure:
     "anl_market_sentiment": "bearish | neutral | bullish | mixed",
     "anl_confidence": 0,
     "anl_risk_level": "low | medium | high",
-    "anl_timeframe": "short-term | medium-term | long-term | multiple"
+    "anl_timeframe": "short-term | medium-term | long-term | multiple",
+    "assets": [
+        {{
+            "symbol": "exact symbol from LINKED ASSETS",
+            "direction": "negative | neutral | positive | mixed",
+            "confidence": 0,
+            "timeframe": "short-term | medium-term | long-term | multiple",
+            "reason": "asset-specific financial reasoning"
+        }}
+    ],
+    "signals": [
+        {{
+            "sig_asset_symbol": "exact symbol from LINKED ASSETS",
+            "sig_action": "buy | sell | hold",
+            "sig_entry_price": null,
+            "sig_stop_loss_price": null,
+            "sig_take_profit_price": null,
+            "sig_confidence": 0,
+            "sig_timeframe": "short-term | medium-term | long-term | multiple",
+            "sig_expires_at": null
+        }}
+    ]
 }}
 
 FIELD DEFINITIONS:
@@ -535,6 +924,47 @@ likely to develop.
 Use "multiple" when important effects occur across meaningfully different
 time horizons.
 
+assets:
+Return one asset assessment for every symbol supplied in LINKED ASSETS.
+Use the exact supplied Yahoo Finance symbol and do not add unlisted symbols.
+Assess each asset independently because the same event may affect different
+assets in different directions.
+
+signals:
+A list of concise, asset-specific analytical signals. Each signal must concern
+an asset from LINKED ASSETS and must be supported by the source, the supplied
+price context, and the
+financial reasoning in the analysis. An asset may be directly or indirectly
+affected, but an indirect effect must have a clear causal mechanism.
+
+sig_action:
+- buy: the information has a sufficiently supported favorable implication for
+  this specific asset
+- sell: the information has a sufficiently supported unfavorable implication
+  for this specific asset
+- hold: the asset is materially relevant, but the directional implications are
+  neutral, balanced, or too uncertain for buy or sell
+
+Do not assume that every asset in the same industry is affected in the same
+direction. Evaluate every returned signal independently.
+
+sig_confidence:
+An integer from 0 to 100 representing confidence in this asset-specific signal.
+
+sig_timeframe:
+The main timeframe for this specific signal: short-term, medium-term,
+long-term, or multiple.
+
+sig_entry_price, sig_stop_loss_price, sig_take_profit_price:
+Use the supplied current_price as entry when appropriate. The server will also
+fill a missing buy/sell entry from current_price. For a buy, stop loss must be
+below entry and take profit above entry. For a sell, stop loss must be above
+entry and take profit below entry. Use null for unsupported levels. All price
+fields must be null for hold.
+
+sig_expires_at:
+Always use null. Signal expiry is not inferred automatically.
+
 Do not add additional JSON fields.
 Do not include markdown.
 Do not include text before or after the JSON.
@@ -555,6 +985,9 @@ SENTIMENT:
 
 CLASSIFICATION REASON:
 {classification.cls_reason}
+
+LINKED ASSETS AND YAHOO FINANCE PRICE CONTEXT:
+{asset_context}
 
 
 SOURCE:

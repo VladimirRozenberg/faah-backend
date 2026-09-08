@@ -5,11 +5,21 @@ import logging
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from assets.repository import save_detected_assets
 from assets.schemas import DetectedAsset
-from models import Asset, DataSource, SourceClassification
+from prompt.niche_assignment import assign_niches_to_asset
+from models import (
+    Asset,
+    AssetNiche,
+    ClassificationNiche,
+    DataSource,
+    Niche,
+    SourceClassification,
+    Stock,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -24,6 +34,7 @@ class AssetDetectionResult(BaseModel):
 def generate_asset_detection_prompt(
     classification: SourceClassification,
     source: DataSource,
+    niche_context: str = "No niche context is available.",
 ) -> str:
     """Construit le prompt à partir de l'article lié à la classification."""
 
@@ -58,6 +69,13 @@ Rules:
 - If no precise asset can be identified, return an empty assets list.
 - Do not include markdown or text outside the JSON.
 
+NICHE CONTEXT:
+The niches and known assets below are hints, not a restricted candidate list.
+Only return an asset when the source itself provides a clear connection.
+Do not return every asset from a relevant niche.
+
+{niche_context}
+
 SOURCE TYPE:
 {source.src_type}
 
@@ -81,6 +99,78 @@ CLASSIFICATION REASON:
 """
 
 
+async def get_classification_niche_context(
+    db: AsyncSession,
+    classification_id: int,
+) -> str:
+    """Retourne les niches choisies et leurs actifs déjà connus."""
+
+    niches = list(
+        (
+            await db.scalars(
+                select(Niche)
+                .join(
+                    ClassificationNiche,
+                    ClassificationNiche.cln_nic_id == Niche.nic_id,
+                )
+                .where(
+                    ClassificationNiche.cln_cls_id == classification_id
+                )
+                .order_by(Niche.nic_category, Niche.nic_name)
+            )
+        ).all()
+    )
+
+    if not niches:
+        return "No niche was selected for this classification."
+
+    niche_ids = [niche.nic_id for niche in niches]
+    asset_rows = (
+        await db.execute(
+            select(Asset, Stock, Niche.nic_name)
+            .join(AssetNiche, AssetNiche.ani_ast_id == Asset.ast_id)
+            .join(Niche, Niche.nic_id == AssetNiche.ani_nic_id)
+            .outerjoin(Stock, Stock.sto_ast_id == Asset.ast_id)
+            .where(AssetNiche.ani_nic_id.in_(niche_ids))
+            .order_by(Asset.ast_symbol, Niche.nic_name)
+        )
+    ).all()
+
+    assets_by_id = {}
+    for asset, stock, niche_name in asset_rows:
+        entry = assets_by_id.setdefault(
+            asset.ast_id,
+            {
+                "asset": asset,
+                "stock": stock,
+                "niches": [],
+            },
+        )
+        entry["niches"].append(niche_name)
+
+    niche_lines = "\n".join(
+        f"- {niche.nic_name}: {niche.nic_description}"
+        for niche in niches
+    )
+    asset_lines = "\n".join(
+        (
+            f"- {entry['asset'].ast_symbol} | "
+            f"{entry['asset'].ast_name} | "
+            f"type={entry['asset'].ast_type} | "
+            f"sector={entry['stock'].sto_sector if entry['stock'] else 'unknown'} | "
+            f"industry={entry['stock'].sto_industry if entry['stock'] else 'unknown'} | "
+            f"niches={', '.join(entry['niches'])}"
+        )
+        for entry in assets_by_id.values()
+    )
+
+    return (
+        f"SELECTED NICHES:\n{niche_lines}\n\n"
+        "KNOWN ASSETS IN THOSE NICHES:\n"
+        f"{asset_lines or '- None yet'}"
+    )
+
+
 async def detect_and_save_assets(
     classification: SourceClassification,
     db: AsyncSession,
@@ -98,7 +188,15 @@ async def detect_and_save_assets(
             f"{classification.cls_id} was not found"
         )
 
-    prompt = generate_asset_detection_prompt(classification, source)
+    niche_context = await get_classification_niche_context(
+        db,
+        classification.cls_id,
+    )
+    prompt = generate_asset_detection_prompt(
+        classification,
+        source,
+        niche_context,
+    )
 
     response = await client.responses.create(
         model="deepseek-v4-flash",
@@ -122,6 +220,26 @@ async def detect_and_save_assets(
         classification.cls_id,
         result.assets,
     )
+
+    for asset in assets:
+        existing_niche_id = await db.scalar(
+            select(AssetNiche.ani_nic_id)
+            .where(AssetNiche.ani_ast_id == asset.ast_id)
+            .limit(1)
+        )
+
+        if existing_niche_id is not None:
+            continue
+
+        asset_symbol = asset.ast_symbol
+
+        try:
+            await assign_niches_to_asset(db, client, asset)
+        except Exception:
+            logger.exception(
+                "Niche assignment failed for new asset %s",
+                asset_symbol,
+            )
 
     logger.info(
         "%d asset(s) found for classification %d",

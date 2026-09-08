@@ -13,6 +13,7 @@ from sqlalchemy import (
 )
 
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import JSONB
 
 from db import Base
 
@@ -121,6 +122,47 @@ class Asset(Base):
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
+    )
+
+
+# ============================================================
+# NICHES
+# ============================================================
+
+class Niche(Base):
+    __tablename__ = "niches"
+
+    nic_id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    nic_name: Mapped[str] = mapped_column(
+        String,
+        unique=True,
+        nullable=False,
+    )
+
+    nic_category: Mapped[str] = mapped_column(String, nullable=False)
+    nic_description: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+# ============================================================
+# ASSET NICHES
+# ============================================================
+
+class AssetNiche(Base):
+    __tablename__ = "asset_niches"
+
+    ani_ast_id: Mapped[int] = mapped_column(
+        ForeignKey("assets.ast_id"),
+        primary_key=True,
+    )
+
+    ani_nic_id: Mapped[int] = mapped_column(
+        ForeignKey("niches.nic_id"),
+        primary_key=True,
     )
 
 
@@ -546,6 +588,24 @@ class SourceClassification(Base):
 
 
 # ============================================================
+# CLASSIFICATION NICHES
+# ============================================================
+
+class ClassificationNiche(Base):
+    __tablename__ = "classification_niches"
+
+    cln_cls_id: Mapped[int] = mapped_column(
+        ForeignKey("source_classifications.cls_id"),
+        primary_key=True,
+    )
+
+    cln_nic_id: Mapped[int] = mapped_column(
+        ForeignKey("niches.nic_id"),
+        primary_key=True,
+    )
+
+
+# ============================================================
 # CLASSIFICATION ASSETS
 # ============================================================
 
@@ -631,6 +691,30 @@ class Analysis(Base):
         server_default=func.now(),
         nullable=False,
     )
+
+
+# ============================================================
+# ANALYSIS ASSETS
+# ============================================================
+
+class AnalysisAsset(Base):
+    __tablename__ = "analysis_assets"
+
+    aas_anl_id: Mapped[int] = mapped_column(
+        ForeignKey("analyses.anl_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+    aas_ast_id: Mapped[int] = mapped_column(
+        ForeignKey("assets.ast_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+    aas_direction: Mapped[str | None] = mapped_column(String)
+    aas_confidence: Mapped[int | None] = mapped_column(Integer)
+    aas_timeframe: Mapped[str | None] = mapped_column(String)
+    aas_reason: Mapped[str | None] = mapped_column(Text)
+    aas_price_context: Mapped[dict | None] = mapped_column(JSONB)
 
 
 # ============================================================

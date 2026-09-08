@@ -91,7 +91,11 @@ async def listen_to_yfinance() -> None:
     """Écoute Yahoo et se reconnecte si la connexion est coupée."""
 
     while True:
-        symbols = await get_tracked_symbols()
+        try:
+            symbols = await get_tracked_symbols()
+        except Exception:
+            await asyncio.sleep(10)
+            continue
 
         if not symbols:
             print("Aucun actif à suivre. Nouvelle vérification dans 10 secondes.")
