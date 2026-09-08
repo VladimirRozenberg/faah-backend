@@ -41,6 +41,23 @@ services:
     volumes:
       - .:/app
 
+  live-worker:
+    build: .
+    container_name: faah_live_worker
+    restart: always
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+    command: python -u -m live_market.worker
+    depends_on:
+      db:
+        condition: service_started
+      redis:
+        condition: service_started
+    volumes:
+      - .:/app
+
 volumes:
   faah_postgres_data:
   faah_redis_data:

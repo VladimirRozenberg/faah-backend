@@ -14,12 +14,12 @@ from datetime import datetime, timedelta, timezone
 import logging
 from typing import Literal
 from pydantic import BaseModel
-
+import os
 from assets.detection import detect_and_save_assets
 
 
 client=AsyncOpenAI(
-    api_key="sk-ad460ae7b7ae4bcfbd1e637eb33c5771",
+    api_key=os.getenv("FAAH_API_KEY"),
     base_url="https://api.deepseek.com"
     )
 
