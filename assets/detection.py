@@ -1,6 +1,5 @@
 """Détecte les actifs concernés après une classification positive."""
 
-import asyncio
 import json
 import logging
 
@@ -82,12 +81,12 @@ CLASSIFICATION REASON:
 """
 
 
-async def detect_and_save_assets_detailed(
+async def detect_and_save_assets(
     classification: SourceClassification,
     db: AsyncSession,
     client: AsyncOpenAI,
 ) -> tuple[AssetDetectionResult, list[Asset]]:
-    """Retourne les candidats DeepSeek et les actifs validés par Yahoo."""
+    """Détecte les candidats puis enregistre les actifs validés par Yahoo."""
 
     if not classification.cls_should_trigger:
         return AssetDetectionResult(), []
@@ -107,7 +106,7 @@ async def detect_and_save_assets_detailed(
         input=prompt,
         max_output_tokens=2000,
         reasoning={"effort": "none"},
-            text={"format": {"type": "json_object"}},
+        text={"format": {"type": "json_object"}},
     )
 
     content = response.output_text
@@ -130,33 +129,3 @@ async def detect_and_save_assets_detailed(
         classification.cls_id,
     )
     return result, assets
-
-
-async def detect_and_save_assets(
-    classification: SourceClassification,
-    db: AsyncSession,
-    client: AsyncOpenAI,
-) -> list[Asset]:
-    """Vérifie le trigger, trouve les symboles puis les enregistre."""
-
-    if not classification.cls_should_trigger:
-        return []
-
-    try:
-        _, assets = await detect_and_save_assets_detailed(
-            classification,
-            db,
-            client,
-        )
-        return assets
-
-    except asyncio.CancelledError:
-        raise
-
-    except Exception:
-        await db.rollback()
-        logger.exception(
-            "Asset detection failed for classification %d",
-            classification.cls_id,
-        )
-        return []

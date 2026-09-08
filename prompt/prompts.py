@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from assets.detection import (
     AssetDetectionResult,
-    detect_and_save_assets_detailed,
+    detect_and_save_assets,
     generate_asset_detection_prompt,
 )
 from assets.repository import save_detected_assets
@@ -111,7 +111,7 @@ async def test_asset_detection_endpoint(
             )
             mode = "mock"
         else:
-            result, saved_assets = await detect_and_save_assets_detailed(
+            result, saved_assets = await detect_and_save_assets(
                 classification,
                 db,
                 prompts.client,

@@ -148,11 +148,20 @@ async def classify_source(source_id: int, db: DbSession):
 
     classification_id = db_classification.cls_id
 
-    await detect_and_save_assets(
-        db_classification,
-        db,
-        client,
-    )
+    try:
+        await detect_and_save_assets(
+            db_classification,
+            db,
+            client,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        await db.rollback()
+        logger.exception(
+            "Asset detection failed for classification %d",
+            db_classification.cls_id,
+        )
 
     if db_classification.cls_should_trigger:
         for attempt in range(1, 4):
