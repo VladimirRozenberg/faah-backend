@@ -10,7 +10,9 @@ from assets.market_data import (
     ALLOWED_PERIOD_INTERVALS,
     InvalidHistoryRequestError,
     MarketDataUnavailableError,
-    market_data_service,
+    get_candles,
+    get_market_asset,
+    get_market_assets,
 )
 
 from assets.schemas import (
@@ -132,7 +134,7 @@ async def list_market(db: DbSession) -> MarketListResponse:
         )
         database_assets = list(result.scalars().all())
         items = await asyncio.to_thread(
-            market_data_service.get_assets,
+            get_market_assets,
             database_assets,
         )
         return MarketListResponse(
@@ -176,7 +178,7 @@ async def get_asset_market(symbol: str, db: DbSession) -> AssetSummary:
         raise HTTPException(status_code=404, detail=f"L'actif {symbol} n'existe pas.")
 
     try:
-        return await asyncio.to_thread(market_data_service.get_asset, asset)
+        return await asyncio.to_thread(get_market_asset, asset)
     except Exception as error:
         raise_http_error(error)
         raise
@@ -201,7 +203,7 @@ async def get_asset_candles(
 
     try:
         return await asyncio.to_thread(
-            market_data_service.get_candles,
+            get_candles,
             symbol,
             period,
             interval,

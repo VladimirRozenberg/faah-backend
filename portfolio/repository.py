@@ -8,7 +8,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from assets.market_data import market_data_service
+from assets.market_data import get_market_asset
 from live_market.redis_client import get_latest_quote
 from models import Asset, Portfolio, PortfolioAsset, Transaction, User
 from portfolio.schemas import (
@@ -81,7 +81,7 @@ async def get_current_price(asset: Asset) -> float | None:
 
     try:
         market_asset = await asyncio.to_thread(
-            market_data_service.get_asset,
+            get_market_asset,
             asset,
         )
         return market_asset.last_price

@@ -1,12 +1,9 @@
 from fastapi import APIRouter, HTTPException, status
 
 from assets.detection import (
-    AssetDetectionResult,
     detect_and_save_assets,
     generate_asset_detection_prompt,
 )
-from assets.repository import save_detected_assets
-from assets.schemas import DetectedAsset
 from models import DataSource, SourceClassification
 from prompt.price_context import (
     PriceContext,
@@ -16,16 +13,9 @@ from prompt.price_context import (
 from prompt.niche_assignment import assign_niches_to_all_assets
 from prompt import prompt_text as prompts
 from db import DbSession
-from pydantic import BaseModel, Field
 
 
 router = APIRouter(tags=["Prompts"])
-
-
-class AssetDetectionTestRequest(BaseModel):
-    """Candidats facultatifs permettant de tester sans appeler DeepSeek."""
-
-    mock_symbols: list[str] | None = Field(default=None, max_length=10)
 
 
 @router.get("/classify/{source_id}")
@@ -79,7 +69,6 @@ async def price_context_endpoint(symbol: str) -> PriceContext:
 async def test_asset_detection_endpoint(
     classification_id: int,
     db: DbSession,
-    request: AssetDetectionTestRequest | None = None,
 ):
     """Teste seulement la détection et l'enregistrement des actifs."""
 
@@ -104,11 +93,6 @@ async def test_asset_detection_endpoint(
     if not classification.cls_should_trigger:
         return {
             "status": "skipped",
-            "mode": (
-                "mock"
-                if request is not None and request.mock_symbols is not None
-                else "live"
-            ),
             "classification_id": classification_id,
             "reason": "Classification is not marked for analysis",
             "prompt": prompt_text,
@@ -117,30 +101,11 @@ async def test_asset_detection_endpoint(
         }
 
     try:
-        if request is not None and request.mock_symbols is not None:
-            result = AssetDetectionResult(
-                assets=[
-                    DetectedAsset(
-                        symbol=symbol,
-                        confidence=100,
-                        reason="Manually supplied test candidate",
-                    )
-                    for symbol in request.mock_symbols
-                ]
-            )
-            saved_assets = await save_detected_assets(
-                db,
-                classification_id,
-                result.assets,
-            )
-            mode = "mock"
-        else:
-            result, saved_assets = await detect_and_save_assets(
-                classification,
-                db,
-                prompts.client,
-            )
-            mode = "live"
+        result, saved_assets = await detect_and_save_assets(
+            classification,
+            db,
+            prompts.client,
+        )
     except Exception as error:
         await db.rollback()
         raise HTTPException(
@@ -154,7 +119,6 @@ async def test_asset_detection_endpoint(
 
     return {
         "status": "completed",
-        "mode": mode,
         "classification_id": classification_id,
         "prompt": prompt_text,
         "candidate_count": len(result.assets),
