@@ -11,7 +11,9 @@ from prompt.price_context import (
     get_price_context,
 )
 from prompt.niche_assignment import assign_niches_to_all_assets
-from prompt import prompt_text as prompts
+from prompt.classification import classify_source
+from prompt.llm_client import client
+from prompt.source_analysis import analyze_source
 from db import DbSession
 
 
@@ -20,7 +22,7 @@ router = APIRouter(tags=["Prompts"])
 
 @router.get("/classify/{source_id}")
 async def classify_source_endpoint(source_id: int, db: DbSession):
-    classification = await prompts.classify_source(source_id, db)
+    classification = await classify_source(source_id, db)
     return classification
 
 
@@ -29,7 +31,7 @@ async def assign_asset_niches_endpoint(db: DbSession):
     """Classe tous les actifs dans les niches disponibles."""
 
     try:
-        return await assign_niches_to_all_assets(db, prompts.client)
+        return await assign_niches_to_all_assets(db, client)
     except ValueError as error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -104,7 +106,7 @@ async def test_asset_detection_endpoint(
         result, saved_assets = await detect_and_save_assets(
             classification,
             db,
-            prompts.client,
+            client,
         )
     except Exception as error:
         await db.rollback()
@@ -144,5 +146,5 @@ async def generate_analysis_endpoint(
     classification_id: int,
     db: DbSession,
 ):
-    analysis = await prompts.analyze_source(source_id, classification_id, db)
+    analysis = await analyze_source(source_id, classification_id, db)
     return analysis

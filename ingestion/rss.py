@@ -13,7 +13,7 @@ from sqlalchemy import select
 from db import DbSession
 from models import DataSource
 
-from prompt.prompt_text import classify_source
+from prompt.classification import classify_source
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +222,5 @@ async def ingest_rss_feed(
             )
 
     return new_source_ids
-
 
 

@@ -4,7 +4,7 @@ import os
 
 from routers import assets, health, live_market, portfolios
 import prompt.prompts as prompts
-from prompt import prompt_text
+from prompt.classification import classify_source
 from db import DbSession
 from ingestion import rss
 from models import DataSource
@@ -164,7 +164,7 @@ async def test_rss_analysis(db: DbSession):
 
     for source_id in news:
 
-        classification, analysis = await prompt_text.classify_source(
+        classification, analysis = await classify_source(
             source_id,
             db,
         )
