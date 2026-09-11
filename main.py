@@ -2,7 +2,16 @@ from fastapi import FastAPI
 from sqlalchemy import text, select
 import os
 
-from routers import assets, health, live_market, portfolios
+from routers import (
+    analyses,
+    assets,
+    classifications,
+    data_sources,
+    health,
+    live_market,
+    portfolios,
+    signals,
+)
 import prompt.prompts as prompts
 from prompt.classification import classify_source
 from db import DbSession
@@ -93,6 +102,10 @@ app.include_router(health.router)
 app.include_router(assets.router)
 app.include_router(live_market.router)
 app.include_router(portfolios.router)
+app.include_router(data_sources.router)
+app.include_router(classifications.router)
+app.include_router(analyses.router)
+app.include_router(signals.router)
 app.include_router(prompts.router, prefix="/prompt")
 app.include_router(workers.router)
 app.include_router(login.router)
