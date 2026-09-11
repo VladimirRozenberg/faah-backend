@@ -1,4 +1,4 @@
-"""Création des actifs détectés dans les actualités."""
+"""Vérifie les symboles Yahoo et enregistre les actifs dans PostgreSQL."""
 
 import asyncio
 from datetime import datetime, timezone
@@ -97,76 +97,62 @@ async def create_specific_row(
     asset: Asset,
     information: dict,
 ) -> None:
-    """Crée la ligne stock, crypto, forex ou future si elle manque."""
+    """Crée ou met à jour la fiche correspondant au type de l'actif."""
+
+    # La fiche spécialisée reprend l'identifiant de la table assets.
+    # Si elle existe déjà, on actualise seulement ses informations Yahoo.
 
     if asset.ast_type == "stock":
         row = await db.get(Stock, asset.ast_id)
         if row is None:
-            db.add(
-                Stock(
-                    sto_ast_id=asset.ast_id,
-                    sto_sector=information["sector"],
-                    sto_industry=information["industry"],
-                )
-            )
-        else:
-            row.sto_sector = information["sector"]
-            row.sto_industry = information["industry"]
+            row = Stock(sto_ast_id=asset.ast_id)
+            db.add(row)
+
+        row.sto_sector = information["sector"]
+        row.sto_industry = information["industry"]
 
     elif asset.ast_type == "crypto":
         row = await db.get(Crypto, asset.ast_id)
         if row is None:
-            base, quote = split_crypto_symbol(asset.ast_symbol)
-            db.add(
-                Crypto(
-                    cry_ast_id=asset.ast_id,
-                    cry_base_currency=base,
-                    cry_quote_currency=quote,
-                    cry_blockchain=None,
-                    cry_contract_address=None,
-                )
+            row = Crypto(
+                cry_ast_id=asset.ast_id,
+                cry_blockchain=None,
+                cry_contract_address=None,
             )
-        else:
-            base, quote = split_crypto_symbol(asset.ast_symbol)
-            row.cry_base_currency = base
-            row.cry_quote_currency = quote
+            db.add(row)
+
+        base, quote = split_crypto_symbol(asset.ast_symbol)
+        row.cry_base_currency = base
+        row.cry_quote_currency = quote
 
     elif asset.ast_type == "forex":
         row = await db.get(Forex, asset.ast_id)
+        base, quote = split_forex_symbol(asset.ast_symbol)
+
+        # Exemple : EURUSD=X donne EUR (base) et USD (devise de cotation).
+        # Ces deux valeurs sont obligatoires dans la table forex.
+        if base is None or quote is None:
+            return
+
         if row is None:
-            base, quote = split_forex_symbol(asset.ast_symbol)
+            row = Forex(for_ast_id=asset.ast_id)
+            db.add(row)
 
-            # La table forex exige ces deux valeurs.
-            if base is None or quote is None:
-                return
-
-            db.add(
-                Forex(
-                    for_ast_id=asset.ast_id,
-                    for_base_currency=base,
-                    for_quote_currency=quote,
-                )
-            )
-        else:
-            base, quote = split_forex_symbol(asset.ast_symbol)
-            if base is not None and quote is not None:
-                row.for_base_currency = base
-                row.for_quote_currency = quote
+        row.for_base_currency = base
+        row.for_quote_currency = quote
 
     elif asset.ast_type == "future":
         row = await db.get(Future, asset.ast_id)
         if row is None:
-            db.add(
-                Future(
-                    fut_ast_id=asset.ast_id,
-                    fut_underlying_name=asset.ast_name,
-                    fut_underlying_type=None,
-                    fut_unit=None,
-                    fut_contract_size=None,
-                )
+            row = Future(
+                fut_ast_id=asset.ast_id,
+                fut_underlying_type=None,
+                fut_unit=None,
+                fut_contract_size=None,
             )
-        else:
-            row.fut_underlying_name = asset.ast_name
+            db.add(row)
+
+        row.fut_underlying_name = asset.ast_name
 
 
 async def save_detected_assets(
@@ -180,6 +166,7 @@ async def save_detected_assets(
     used_symbols = set()
 
     for detected in detected_assets[:10]:
+        # 1. Uniformiser le symbole et éviter les doublons dans cette liste.
         requested_symbol = detected.symbol.strip().upper()
 
         if not requested_symbol or requested_symbol in used_symbols:
@@ -187,7 +174,10 @@ async def save_detected_assets(
 
         used_symbols.add(requested_symbol)
 
-        # yfinance est synchrone : to_thread évite de bloquer toute l'API.
+        # 2. Vérifier le symbole auprès de Yahoo.
+        # [IA-03] Partie technique avec l'aide de l'IA : yfinance est
+        # synchrone. to_thread exécute son appel dans un thread séparé,
+        # pour que l'API puisse continuer à traiter d'autres demandes.
         information = await asyncio.to_thread(
             get_yahoo_information,
             requested_symbol,
@@ -201,31 +191,34 @@ async def save_detected_assets(
             select(Asset).where(Asset.ast_symbol == symbol)
         )
 
-        if asset is None:
+        # 3. Créer l'actif ou actualiser celui qui existe déjà.
+        is_new_asset = asset is None
+
+        if is_new_asset:
             asset = Asset(
                 ast_symbol=symbol,
-                ast_name=information["name"],
                 ast_type=information["type"],
-                ast_yahoo_type=information["yahoo_type"],
-                ast_exchange=information["exchange"],
-                ast_currency=information["currency"],
-                ast_country=information["country"],
-                ast_is_tracked=True,
             )
             db.add(asset)
-            await db.flush()
         else:
             if asset.ast_type != information["type"]:
                 continue
-
-            asset.ast_name = information["name"]
-            asset.ast_yahoo_type = information["yahoo_type"]
-            asset.ast_exchange = information["exchange"]
-            asset.ast_currency = information["currency"]
-            asset.ast_country = information["country"]
-            asset.ast_is_tracked = True
             asset.ast_updated_at = datetime.now(timezone.utc)
 
+        # Ces champs sont les mêmes pour un actif nouveau ou déjà présent.
+        asset.ast_name = information["name"]
+        asset.ast_yahoo_type = information["yahoo_type"]
+        asset.ast_exchange = information["exchange"]
+        asset.ast_currency = information["currency"]
+        asset.ast_country = information["country"]
+        asset.ast_is_tracked = True
+
+        if is_new_asset:
+            # flush obtient l'identifiant créé par la base, sans valider
+            # définitivement la transaction. Les autres tables en ont besoin.
+            await db.flush()
+
+        # 4. Enregistrer la fiche spécialisée et le lien avec la news classée.
         await create_specific_row(db, asset, information)
 
         link = await db.get(
@@ -234,19 +227,17 @@ async def save_detected_assets(
         )
 
         if link is None:
-            db.add(
-                ClassificationAsset(
-                    cla_cls_id=classification_id,
-                    cla_ast_id=asset.ast_id,
-                    cla_relevance_confidence=detected.confidence,
-                    cla_reason=detected.reason,
-                )
+            link = ClassificationAsset(
+                cla_cls_id=classification_id,
+                cla_ast_id=asset.ast_id,
             )
-        else:
-            link.cla_relevance_confidence = detected.confidence
-            link.cla_reason = detected.reason
+            db.add(link)
+
+        link.cla_relevance_confidence = detected.confidence
+        link.cla_reason = detected.reason
 
         saved_assets.append(asset)
 
+    # 5. Valider ensemble les actifs, leurs fiches et leurs liens.
     await db.commit()
     return saved_assets

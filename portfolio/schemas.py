@@ -1,4 +1,4 @@
-"""Objets reçus et renvoyés par les routes des portefeuilles."""
+"""Formats des demandes et des réponses du portefeuille."""
 
 from datetime import datetime
 
@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 class BuyAssetRequest(BaseModel):
     """Achat simulé envoyé par Avalonia."""
 
+    # Pydantic exige un symbole non vide et des nombres strictement positifs.
     symbol: str = Field(min_length=1)
     quantity: float = Field(gt=0)
     purchase_price: float = Field(gt=0)
@@ -53,6 +54,7 @@ class PortfolioPositionResponse(BaseModel):
     quantity: float
     average_purchase_price: float
     invested_amount: float
+    # None signifie que le cours n'a pas pu être récupéré dans Redis ou Yahoo.
     current_price: float | None
     current_value: float | None
     profit_loss: float | None
@@ -70,6 +72,7 @@ class PortfolioResponse(BaseModel):
     is_active: bool
     created_at: datetime
     positions_count: int
+    # Montant d'achat des positions encore détenues ; ce n'est pas un solde.
     total_invested: float
     total_current_value: float | None
     total_profit_loss: float | None

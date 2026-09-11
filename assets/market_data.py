@@ -30,6 +30,9 @@ class MarketDataUnavailableError(RuntimeError):
 def get_symbol_data(data: pd.DataFrame, symbol: str) -> pd.DataFrame:
     """Prend uniquement les données qui appartiennent au symbole."""
 
+    # [IA-02] Partie technique avec l'aide de l'IA : pandas organise
+    # parfois les colonnes sur deux niveaux, par exemple AAPL puis Close.
+    # On sélectionne alors le tableau du symbole demandé.
     if not isinstance(data.columns, pd.MultiIndex):
         return data
 
@@ -46,6 +49,8 @@ def get_market_assets(database_assets: list[Asset]) -> list[AssetSummary]:
         return []
 
     try:
+        # Un seul appel groupé pour tous les actifs, sur les cinq derniers
+        # jours. Cela permet de comparer les deux dernières clôtures reçues.
         market_data = yf.download(
             [asset.ast_symbol for asset in database_assets],
             period="5d",
@@ -74,6 +79,8 @@ def get_market_assets(database_assets: list[Asset]) -> list[AssetSummary]:
         if asset_data.empty or "Close" not in asset_data:
             continue
 
+        # Convertir les valeurs en nombres et retirer les données manquantes.
+        # iloc[-1] désigne la dernière ligne ; iloc[-2], l'avant-dernière.
         closes = pd.to_numeric(
             asset_data["Close"], errors="coerce"
         ).dropna()
@@ -81,13 +88,14 @@ def get_market_assets(database_assets: list[Asset]) -> list[AssetSummary]:
             continue
 
         current_price = float(closes.iloc[-1])
-        previous_close = float(closes.iloc[-2]) if len(closes) >= 2 else current_price
+        previous_close = current_price
+        if len(closes) >= 2:
+            previous_close = float(closes.iloc[-2])
+
         change = current_price - previous_close
-        change_percent = (
-            change / previous_close * 100
-            if previous_close != 0
-            else 0
-        )
+        change_percent = 0
+        if previous_close != 0:
+            change_percent = change / previous_close * 100
 
         volume = None
         if "Volume" in asset_data:
@@ -159,11 +167,16 @@ def get_candles(
             f"Aucune bougie disponible pour {symbol}."
         )
 
+    # Une bougie décrit l'ouverture, le plus haut, le plus bas et la clôture
+    # pendant un intervalle. On ignore les lignes où l'un de ces prix manque.
     history = history.dropna(subset=required_columns)
     candles = []
 
     for timestamp, row in history.iterrows():
         raw_volume = row.get("Volume")
+        volume = None
+        if not pd.isna(raw_volume):
+            volume = int(raw_volume)
 
         candles.append(
             Candle(
@@ -172,7 +185,7 @@ def get_candles(
                 high=float(row["High"]),
                 low=float(row["Low"]),
                 close=float(row["Close"]),
-                volume=None if pd.isna(raw_volume) else int(raw_volume),
+                volume=volume,
             )
         )
 

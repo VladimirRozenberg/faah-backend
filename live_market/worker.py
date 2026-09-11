@@ -1,4 +1,4 @@
-"""Reçoit les cours yfinance des actifs suivis dans PostgreSQL."""
+"""Reçoit les cours Yahoo des actifs suivis et les transmet à Redis."""
 
 import asyncio
 from datetime import datetime, timezone
@@ -16,12 +16,9 @@ async def get_tracked_symbols() -> list[str]:
     """Lit dans PostgreSQL les symboles que le worker doit suivre."""
 
     async with AsyncSessionLocal() as db:
-        result = await db.execute(
-            select(Asset.ast_symbol).where(
-                Asset.ast_is_tracked.is_(True)
-            )
-        )
-        return list(result.scalars().all())
+        query = select(Asset.ast_symbol).where(Asset.ast_is_tracked.is_(True))
+        symbols = await db.scalars(query)
+        return list(symbols.all())
 
 
 def create_quote(message: dict) -> LiveQuote | None:
@@ -32,7 +29,8 @@ def create_quote(message: dict) -> LiveQuote | None:
         price = float(message["price"])
         raw_time = int(message.get("time", 0))
 
-        # Yahoo envoie normalement le temps en millisecondes.
+        # Les dates Yahoo sont généralement en millisecondes depuis 1970.
+        # datetime attend des secondes ; on accepte aussi ce format.
         if raw_time > 10_000_000_000:
             raw_time = raw_time / 1000
 
@@ -42,9 +40,12 @@ def create_quote(message: dict) -> LiveQuote | None:
             timestamp = datetime.now(timezone.utc)
 
         raw_volume = message.get("day_volume")
-        volume = int(raw_volume) if raw_volume is not None else None
+        volume = None
+        if raw_volume is not None:
+            volume = int(raw_volume)
 
     except (KeyError, TypeError, ValueError):
+        # Ignorer le message si une valeur obligatoire manque ou est invalide.
         return None
 
     if price <= 0:
@@ -79,6 +80,8 @@ async def add_new_symbols(websocket, subscribed: set[str]) -> None:
             print(f"Impossible de relire les actifs : {error}")
             continue
 
+        # La différence entre les deux ensembles donne les nouveaux symboles.
+        # On ne se réabonne donc pas aux actifs déjà écoutés.
         new_symbols = database_symbols - subscribed
 
         if new_symbols:
@@ -87,8 +90,38 @@ async def add_new_symbols(websocket, subscribed: set[str]) -> None:
             print(f"Nouveaux symboles suivis : {sorted(new_symbols)}")
 
 
+async def stream_quotes(symbols: list[str]) -> None:
+    """Gère une connexion Yahoo, de l'abonnement jusqu'à sa fermeture."""
+
+    websocket = yf.AsyncWebSocket(verbose=False)
+    update_task = None
+
+    try:
+        await websocket.subscribe(symbols)
+
+        # [IA-04] Partie technique avec l'aide de l'IA : cette tâche
+        # vérifie les nouveaux actifs pendant que listen reçoit les cours.
+        # await laisse les autres tâches avancer pendant une attente.
+        update_task = asyncio.create_task(add_new_symbols(websocket, set(symbols)))
+
+        print(f"Connexion yfinance ouverte pour {len(symbols)} actif(s).")
+        await websocket.listen(process_message)
+
+    except Exception as error:
+        print(f"Erreur yfinance : {error}")
+
+    finally:
+        # Toujours arrêter la tâche liée à cette connexion avant de fermer.
+        # cancel demande l'arrêt ; gather attend que la tâche soit terminée.
+        if update_task is not None:
+            update_task.cancel()
+            await asyncio.gather(update_task, return_exceptions=True)
+
+        await websocket.close()
+
+
 async def listen_to_yfinance() -> None:
-    """Écoute Yahoo et se reconnecte si la connexion est coupée."""
+    """Relance l'écoute si elle se termine ou si aucun actif n'est disponible."""
 
     while True:
         try:
@@ -102,28 +135,7 @@ async def listen_to_yfinance() -> None:
             await asyncio.sleep(10)
             continue
 
-        websocket = yf.AsyncWebSocket(verbose=False)
-        update_task = None
-
-        try:
-            await websocket.subscribe(symbols)
-            subscribed = set(symbols)
-            update_task = asyncio.create_task(
-                add_new_symbols(websocket, subscribed)
-            )
-
-            print(f"Connexion yfinance ouverte pour {len(symbols)} actif(s).")
-            await websocket.listen(process_message)
-
-        except Exception as error:
-            print(f"Erreur yfinance : {error}")
-
-        finally:
-            if update_task is not None:
-                update_task.cancel()
-                await asyncio.gather(update_task, return_exceptions=True)
-
-            await websocket.close()
+        await stream_quotes(symbols)
 
         print("Nouvelle tentative dans 3 secondes...")
         await asyncio.sleep(3)

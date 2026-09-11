@@ -1,4 +1,7 @@
-"""Objets JSON liés aux actifs et échangés avec Avalonia."""
+"""Formats des données reçues de l'IA ou échangées avec Avalonia.
+
+Pydantic vérifie les types et les contraintes avant d'accepter les données.
+"""
 
 from datetime import datetime
 
@@ -8,6 +11,7 @@ from pydantic import BaseModel, Field
 class DetectedAsset(BaseModel):
     """Un symbole Yahoo Finance trouvé par DeepSeek."""
 
+    # Field précise les limites : symbole non vide, confiance entre 0 et 100.
     symbol: str = Field(min_length=1, max_length=30)
     confidence: int = Field(ge=0, le=100)
     reason: str
@@ -52,6 +56,8 @@ class AssetItem(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    # Les champs spécialisés restent à None s'ils ne concernent pas ce type
+    # d'actif. Par exemple, une action n'a pas d'adresse de contrat crypto.
     sector: str | None = None
     industry: str | None = None
 
@@ -75,7 +81,7 @@ class AssetListResponse(BaseModel):
 
 
 class Candle(BaseModel):
-    """Une bougie OHLCV utilisée pour construire le graphique."""
+    """Prix d'ouverture, plus haut, plus bas, clôture et volume d'un intervalle."""
 
     timestamp: datetime
     open: float

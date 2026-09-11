@@ -32,6 +32,18 @@ from models import Asset, Crypto, Forex, Future, Stock
 router = APIRouter(prefix="/api", tags=["Marché"])
 
 
+async def find_asset_or_404(db: DbSession, symbol: str) -> Asset:
+    """Recherche commune aux trois routes qui demandent un actif précis."""
+
+    symbol = symbol.upper()
+    asset = await db.scalar(select(Asset).where(Asset.ast_symbol == symbol))
+
+    if asset is None:
+        raise HTTPException(status_code=404, detail=f"L'actif {symbol} n'existe pas.")
+
+    return asset
+
+
 async def create_asset_item(
     db: AsyncSession,
     asset: Asset,
@@ -52,6 +64,8 @@ async def create_asset_item(
         updated_at=asset.ast_updated_at,
     )
 
+    # Ajouter seulement les informations qui correspondent au type de l'actif.
+    # Les autres champs facultatifs restent à None (null dans le JSON).
     if asset.ast_type == "stock":
         stock = await db.get(Stock, asset.ast_id)
 
@@ -82,22 +96,20 @@ async def create_asset_item(
             item.underlying_name = future.fut_underlying_name
             item.underlying_type = future.fut_underlying_type
             item.unit = future.fut_unit
-            item.contract_size = (
-                float(future.fut_contract_size)
-                if future.fut_contract_size is not None
-                else None
-            )
+            if future.fut_contract_size is not None:
+                item.contract_size = float(future.fut_contract_size)
 
     return item
 
 
-def raise_http_error(error: Exception) -> None:
+def create_http_error(error: Exception) -> HTTPException:
     """Convertit les erreurs du service en réponses HTTP compréhensibles."""
 
     if isinstance(error, InvalidHistoryRequestError):
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        return HTTPException(status_code=400, detail=str(error))
     if isinstance(error, MarketDataUnavailableError):
-        raise HTTPException(status_code=502, detail=str(error)) from error
+        return HTTPException(status_code=502, detail=str(error))
+    # Une erreur inattendue reste une erreur serveur, sans être masquée.
     raise error
 
 
@@ -116,10 +128,7 @@ async def list_assets(db: DbSession) -> AssetListResponse:
         item = await create_asset_item(db, asset)
         items.append(item)
 
-    return AssetListResponse(
-        count=len(items),
-        items=items,
-    )
+    return AssetListResponse(count=len(items), items=items)
 
 
 @router.get("/market", response_model=MarketListResponse)
@@ -133,35 +142,21 @@ async def list_market(db: DbSession) -> MarketListResponse:
             .order_by(Asset.ast_type, Asset.ast_name)
         )
         database_assets = list(result.scalars().all())
+        # Yahoo est appelé dans un thread pour laisser l'API disponible.
         items = await asyncio.to_thread(
             get_market_assets,
             database_assets,
         )
-        return MarketListResponse(
-            count=len(items),
-            items=items,
-        )
+        return MarketListResponse(count=len(items), items=items)
     except Exception as error:
-        raise_http_error(error)
-        raise
+        raise create_http_error(error) from error
 
 
 @router.get("/assets/{symbol}", response_model=AssetItem)
 async def get_asset(symbol: str, db: DbSession) -> AssetItem:
     """Recherche un actif dans PostgreSQL avec son symbole."""
 
-    symbol = symbol.upper()
-
-    asset = await db.scalar(
-        select(Asset).where(Asset.ast_symbol == symbol)
-    )
-
-    if asset is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"L'actif {symbol} n'existe pas.",
-        )
-
+    asset = await find_asset_or_404(db, symbol)
     return await create_asset_item(db, asset)
 
 
@@ -169,19 +164,12 @@ async def get_asset(symbol: str, db: DbSession) -> AssetItem:
 async def get_asset_market(symbol: str, db: DbSession) -> AssetSummary:
     """Retourne le prix et la variation d'un actif avec yfinance."""
 
-    symbol = symbol.upper()
-    asset = await db.scalar(
-        select(Asset).where(Asset.ast_symbol == symbol)
-    )
-
-    if asset is None:
-        raise HTTPException(status_code=404, detail=f"L'actif {symbol} n'existe pas.")
+    asset = await find_asset_or_404(db, symbol)
 
     try:
         return await asyncio.to_thread(get_market_asset, asset)
     except Exception as error:
-        raise_http_error(error)
-        raise
+        raise create_http_error(error) from error
 
 
 @router.get("/assets/{symbol}/candles", response_model=CandleResponse)
@@ -194,12 +182,7 @@ async def get_asset_candles(
     """Retourne les bougies OHLCV qui serviront au graphique Avalonia."""
 
     symbol = symbol.upper()
-    asset = await db.scalar(
-        select(Asset).where(Asset.ast_symbol == symbol)
-    )
-
-    if asset is None:
-        raise HTTPException(status_code=404, detail=f"L'actif {symbol} n'existe pas.")
+    await find_asset_or_404(db, symbol)
 
     try:
         return await asyncio.to_thread(
@@ -209,8 +192,7 @@ async def get_asset_candles(
             interval,
         )
     except Exception as error:
-        raise_http_error(error)
-        raise
+        raise create_http_error(error) from error
 
 
 @router.get("/history-options")

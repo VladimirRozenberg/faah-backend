@@ -1,7 +1,6 @@
-"""Fonctions qui gèrent le portefeuille dans PostgreSQL."""
+"""Création du portefeuille, achats et ventes simulés, calculs et historique."""
 
 import asyncio
-
 from datetime import datetime
 from decimal import Decimal
 
@@ -56,6 +55,7 @@ async def get_user_portfolio(db: AsyncSession, user_id: int) -> Portfolio:
     )
 
     if portfolio is None:
+        # Le premier accès crée le portefeuille ; les suivants le réutilisent.
         portfolio = Portfolio(
             prt_usr_id=user_id,
             prt_name="Mon portefeuille",
@@ -77,15 +77,18 @@ async def get_current_price(asset: Asset) -> float | None:
         if quote is not None:
             return quote.price
     except Exception:
+        # Si Redis est indisponible, essayer Yahoo plutôt que bloquer la lecture.
         pass
 
     try:
+        # L'appel Yahoo est synchrone : ce thread évite de bloquer l'API.
         market_asset = await asyncio.to_thread(
             get_market_asset,
             asset,
         )
         return market_asset.last_price
     except Exception:
+        # None signifie « prix inconnu », et non « prix égal à zéro ».
         return None
 
 
@@ -112,6 +115,25 @@ def record_transaction(
     )
 
 
+async def save_portfolio_transaction(
+    db: AsyncSession,
+    portfolio: Portfolio,
+    asset: Asset,
+    transaction_type: str,
+    quantity: Decimal,
+    price: Decimal,
+) -> PortfolioResponse:
+    """Enregistre l'opération et renvoie le portefeuille mis à jour."""
+
+    record_transaction(db, portfolio.prt_id, asset.ast_id, transaction_type, quantity, price)
+    portfolio.prt_updated_at = datetime.now()
+
+    # La position a été modifiée dans buy_asset ou sell_asset.
+    # Ce commit valide ensemble cette modification et la ligne d'historique.
+    await db.commit()
+    return await build_portfolio_response(db, portfolio)
+
+
 async def buy_asset(
     db: AsyncSession,
     user_id: int,
@@ -122,6 +144,8 @@ async def buy_asset(
     portfolio = await get_user_portfolio(db, user_id)
     asset = await find_asset(db, data.symbol)
 
+    # Decimal conserve des calculs décimaux pour les montants enregistrés.
+    # La conversion par str évite de reprendre les approximations d'un float.
     quantity = Decimal(str(data.quantity))
     price = Decimal(str(data.purchase_price))
 
@@ -131,6 +155,7 @@ async def buy_asset(
     )
 
     if position is None:
+        # Premier achat de cet actif dans ce portefeuille.
         position = PortfolioAsset(
             pas_prt_id=portfolio.prt_id,
             pas_ast_id=asset.ast_id,
@@ -141,37 +166,26 @@ async def buy_asset(
         db.add(position)
 
     elif not position.pas_is_active:
+        # Une position entièrement vendue est réutilisée lors d'un nouvel achat.
         position.pas_quantity = quantity
         position.pas_average_purchase_price = price
         position.pas_is_active = True
         position.pas_updated_at = datetime.now()
 
     else:
-        old_amount = (
-            position.pas_quantity
-            * position.pas_average_purchase_price
-        )
+        # Moyenne pondérée des achats.
+        # Exemple : 2 unités à 100 + 3 à 120 = 560 / 5 = 112 par unité.
+        old_amount = position.pas_quantity * position.pas_average_purchase_price
         new_amount = quantity * price
+        total_quantity = position.pas_quantity + quantity
 
-        position.pas_quantity += quantity
-        position.pas_average_purchase_price = (
-            old_amount + new_amount
-        ) / position.pas_quantity
+        position.pas_quantity = total_quantity
+        position.pas_average_purchase_price = (old_amount + new_amount) / total_quantity
         position.pas_updated_at = datetime.now()
 
-    record_transaction(
-        db,
-        portfolio.prt_id,
-        asset.ast_id,
-        "buy",
-        quantity,
-        price,
+    return await save_portfolio_transaction(
+        db, portfolio, asset, "buy", quantity, price,
     )
-
-    portfolio.prt_updated_at = datetime.now()
-    await db.commit()
-
-    return await build_portfolio_response(db, portfolio)
 
 
 async def sell_asset(
@@ -204,22 +218,13 @@ async def sell_asset(
     position.pas_updated_at = datetime.now()
 
     if position.pas_quantity == 0:
+        # Garder la ligne pour pouvoir la réutiliser, mais ne plus l'afficher.
         position.pas_average_purchase_price = Decimal("0")
         position.pas_is_active = False
 
-    record_transaction(
-        db,
-        portfolio.prt_id,
-        asset.ast_id,
-        "sell",
-        quantity,
-        price,
+    return await save_portfolio_transaction(
+        db, portfolio, asset, "sell", quantity, price,
     )
-
-    portfolio.prt_updated_at = datetime.now()
-    await db.commit()
-
-    return await build_portfolio_response(db, portfolio)
 
 
 async def create_position_response(
@@ -237,6 +242,7 @@ async def create_position_response(
     profit_percent = None
 
     if current_price is not None:
+        # Gain ou perte des unités encore détenues, pas des ventes passées.
         current_value = quantity * current_price
         profit = current_value - invested
 
@@ -290,10 +296,10 @@ async def build_portfolio_response(
             total_current_value += item.current_value
 
     if missing_price:
-        current_total = None
+        # Un prix inconnu empêche de donner une valeur totale complète.
+        total_current_value = None
         total_profit = None
     else:
-        current_total = total_current_value
         total_profit = total_current_value - total_invested
 
     return PortfolioResponse(
@@ -306,7 +312,7 @@ async def build_portfolio_response(
         created_at=portfolio.prt_created_at,
         positions_count=len(positions),
         total_invested=round_value(total_invested),
-        total_current_value=round_value(current_total),
+        total_current_value=round_value(total_current_value),
         total_profit_loss=round_value(total_profit),
         positions=positions,
     )
@@ -332,9 +338,10 @@ async def read_transactions(
 
     result = await db.execute(
         select(Transaction, Asset)
+        # La jointure ajoute le symbole et le nom de l'actif à chaque opération.
         .join(Asset, Asset.ast_id == Transaction.ast_id_trans)
         .where(Transaction.prt_id_trans == portfolio.prt_id)
-        .order_by(Transaction.createdAt_trans.desc())
+        .order_by(Transaction.createdAt_trans.desc())  # Les plus récentes d'abord.
     )
 
     transactions = []

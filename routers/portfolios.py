@@ -19,11 +19,19 @@ from portfolio.schemas import (
 
 router = APIRouter(prefix="/api", tags=["Portefeuilles"])
 
+# Les routes reçoivent la demande et appellent portfolio.repository.
+# Les calculs et les écritures restent dans ce dossier pour éviter les doublons.
+# DbSession fournit la session de base de données pour la demande en cours.
+
 
 def create_http_error(error: Exception) -> HTTPException:
     """Prépare une erreur HTTP compréhensible."""
 
-    status_code = 404 if isinstance(error, LookupError) else 400
+    # 404 : utilisateur, actif ou position introuvable.
+    # 400 : opération refusée, par exemple une vente trop importante.
+    status_code = 400
+    if isinstance(error, LookupError):
+        status_code = 404
     return HTTPException(
         status_code=status_code,
         detail=str(error),

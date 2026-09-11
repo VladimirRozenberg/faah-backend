@@ -105,69 +105,74 @@ async def get_classification_niche_context(
 ) -> str:
     """Retourne les niches choisies et leurs actifs déjà connus."""
 
-    niches = list(
-        (
-            await db.scalars(
-                select(Niche)
-                .join(
-                    ClassificationNiche,
-                    ClassificationNiche.cln_nic_id == Niche.nic_id,
-                )
-                .where(
-                    ClassificationNiche.cln_cls_id == classification_id
-                )
-                .order_by(Niche.nic_category, Niche.nic_name)
-            )
-        ).all()
+    # [IA-01] Partie technique avec l'aide de l'IA : les jointures
+    # permettent de retrouver les niches reliées à cette classification.
+    niche_query = (
+        select(Niche)
+        .join(ClassificationNiche, ClassificationNiche.cln_nic_id == Niche.nic_id)
+        .where(ClassificationNiche.cln_cls_id == classification_id)
+        .order_by(Niche.nic_category, Niche.nic_name)
     )
+    niche_result = await db.scalars(niche_query)
+    niches = niche_result.all()
 
     if not niches:
         return "No niche was selected for this classification."
 
     niche_ids = [niche.nic_id for niche in niches]
-    asset_rows = (
-        await db.execute(
-            select(Asset, Stock, Niche.nic_name)
-            .join(AssetNiche, AssetNiche.ani_ast_id == Asset.ast_id)
-            .join(Niche, Niche.nic_id == AssetNiche.ani_nic_id)
-            .outerjoin(Stock, Stock.sto_ast_id == Asset.ast_id)
-            .where(AssetNiche.ani_nic_id.in_(niche_ids))
-            .order_by(Asset.ast_symbol, Niche.nic_name)
-        )
-    ).all()
+    # outerjoin conserve aussi les actifs qui ne sont pas des actions
+    # (crypto, forex, futures) : ils n'ont pas de fiche dans stocks.
+    asset_query = (
+        select(Asset, Stock, Niche.nic_name)
+        .join(AssetNiche, AssetNiche.ani_ast_id == Asset.ast_id)
+        .join(Niche, Niche.nic_id == AssetNiche.ani_nic_id)
+        .outerjoin(Stock, Stock.sto_ast_id == Asset.ast_id)
+        .where(AssetNiche.ani_nic_id.in_(niche_ids))
+        .order_by(Asset.ast_symbol, Niche.nic_name)
+    )
+    asset_result = await db.execute(asset_query)
+    asset_rows = asset_result.all()
 
+    # Un actif peut appartenir à plusieurs niches. On rassemble ses niches
+    # pour qu'il apparaisse une seule fois dans le texte envoyé à l'IA.
     assets_by_id = {}
     for asset, stock, niche_name in asset_rows:
-        entry = assets_by_id.setdefault(
-            asset.ast_id,
-            {
+        if asset.ast_id not in assets_by_id:
+            assets_by_id[asset.ast_id] = {
                 "asset": asset,
                 "stock": stock,
                 "niches": [],
-            },
-        )
-        entry["niches"].append(niche_name)
+            }
+        assets_by_id[asset.ast_id]["niches"].append(niche_name)
 
-    niche_lines = "\n".join(
-        f"- {niche.nic_name}: {niche.nic_description}"
-        for niche in niches
-    )
-    asset_lines = "\n".join(
-        (
-            f"- {entry['asset'].ast_symbol} | "
-            f"{entry['asset'].ast_name} | "
-            f"type={entry['asset'].ast_type} | "
-            f"sector={entry['stock'].sto_sector if entry['stock'] else 'unknown'} | "
-            f"industry={entry['stock'].sto_industry if entry['stock'] else 'unknown'} | "
-            f"niches={', '.join(entry['niches'])}"
+    niche_lines = []
+    for niche in niches:
+        niche_lines.append(f"- {niche.nic_name}: {niche.nic_description}")
+
+    asset_lines = []
+    for entry in assets_by_id.values():
+        asset = entry["asset"]
+        stock = entry["stock"]
+        niche_names = ", ".join(entry["niches"])
+        sector = "unknown"
+        industry = "unknown"
+        if stock is not None:
+            sector = stock.sto_sector
+            industry = stock.sto_industry
+
+        asset_lines.append(
+            f"- {asset.ast_symbol} | {asset.ast_name} | "
+            f"type={asset.ast_type} | sector={sector} | "
+            f"industry={industry} | niches={niche_names}"
         )
-        for entry in assets_by_id.values()
-    )
+
+    niche_text = "\n".join(niche_lines)
+    asset_text = "\n".join(asset_lines) or "- None yet"
 
     return (
-        f"SELECTED NICHES:\n{niche_lines}\n\n"
+        f"SELECTED NICHES:\n{niche_text}\n\n"
         "KNOWN ASSETS IN THOSE NICHES:\n"
-        f"{asset_lines or '- None yet'}"
+        f"{asset_text}"
     )
 
 
@@ -178,6 +183,7 @@ async def detect_and_save_assets(
 ) -> tuple[AssetDetectionResult, list[Asset]]:
     """Détecte les candidats puis enregistre les actifs validés par Yahoo."""
 
+    # 1. Ne traiter que les classifications retenues pour une analyse.
     if not classification.cls_should_trigger:
         return AssetDetectionResult(), []
 
@@ -188,6 +194,7 @@ async def detect_and_save_assets(
             f"{classification.cls_id} was not found"
         )
 
+    # 2. Préparer l'article et les niches comme contexte pour l'IA.
     niche_context = await get_classification_niche_context(
         db,
         classification.cls_id,
@@ -198,6 +205,8 @@ async def detect_and_save_assets(
         niche_context,
     )
 
+    # 3. Demander des symboles à l'IA, puis vérifier la structure du JSON.
+    # model_validate contrôle notamment le symbole et la confiance (0 à 100).
     response = await client.responses.create(
         model="deepseek-v4-flash",
         instructions="You identify Yahoo Finance asset symbols.",
@@ -215,12 +224,14 @@ async def detect_and_save_assets(
         json.loads(content, strict=False)
     )
 
+    # 4. Yahoo valide les candidats avant leur enregistrement en base.
     assets = await save_detected_assets(
         db,
         classification.cls_id,
         result.assets,
     )
 
+    # 5. Attribuer des niches seulement aux actifs qui n'en ont pas encore.
     for asset in assets:
         existing_niche_id = await db.scalar(
             select(AssetNiche.ani_nic_id)

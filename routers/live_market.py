@@ -24,7 +24,9 @@ async def find_tracked_symbol(db: DbSession, symbol: str) -> str | None:
             Asset.ast_is_tracked.is_(True),
         )
     )
-    return symbol if asset is not None else None
+    if asset is None:
+        return None
+    return symbol
 
 
 @router.get(
@@ -42,6 +44,7 @@ async def get_latest_price(symbol: str, db: DbSession) -> LiveQuote:
     quote = await get_latest_quote(symbol)
 
     if quote is None:
+        # Redis répond, mais aucun cours n'est disponible pour cet actif.
         raise HTTPException(
             status_code=404,
             detail="Aucun cours en direct reçu pour le moment.",
@@ -64,24 +67,28 @@ async def market_websocket(
         await websocket.close(code=1008)
         return
 
+    # [IA-05] Partie technique avec l'aide de l'IA : cette connexion reste
+    # ouverte pour envoyer plusieurs messages à Avalonia, sans nouvel appel GET.
     await websocket.accept()
 
     try:
         while True:
             latest = await get_latest_quote(symbol)
+            quote_data = None
+            if latest is not None:
+                # Le mode JSON transforme notamment la date en texte.
+                quote_data = latest.model_dump(mode="json")
+
             await websocket.send_json(
                 {
                     "type": "market_update",
                     "symbol": symbol,
-                    "latest": (
-                        latest.model_dump(mode="json")
-                        if latest is not None
-                        else None
-                    ),
+                    "latest": quote_data,
                 }
             )
 
             await asyncio.sleep(3)
 
     except (WebSocketDisconnect, RuntimeError):
+        # Une déconnexion du client termine l'envoi des messages.
         pass

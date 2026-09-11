@@ -1,4 +1,4 @@
-"""Route simple permettant de vérifier que le serveur fonctionne."""
+"""Route de disponibilité de l'API."""
 
 from fastapi import APIRouter
 
@@ -12,5 +12,5 @@ router = APIRouter(tags=["Système"])
 def health() -> HealthResponse:
     """Vérifie FastAPI sans appeler Yahoo Finance."""
 
+    # Confirme que FastAPI répond ; ne teste pas PostgreSQL, Redis ou Yahoo.
     return HealthResponse(status="ok")
-
