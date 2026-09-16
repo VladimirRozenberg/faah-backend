@@ -88,7 +88,7 @@ async def analyze_source(
             "not merely to inspect the supplied headline."
         ),
         input=prompt_text,
-        max_output_tokens=4000,
+        max_output_tokens=12000,
         reasoning={"effort": "high"},
         text={"format": {"type": "json_object"}},
         tools=[{"type": "web_search"}],
@@ -97,7 +97,12 @@ async def analyze_source(
     content = response.output_text
 
     if not content or not content.strip():
-        raise RuntimeError("DeepSeek returned empty analysis output")
+        raise RuntimeError(
+            "DeepSeek returned empty analysis output "
+            f"(status={getattr(response, 'status', None)!r}, "
+            f"incomplete_details={getattr(response, 'incomplete_details', None)!r}, "
+            f"usage={getattr(response, 'usage', None)!r})"
+        )
 
     analysis = FinancialAnalysisResult.model_validate(
         json.loads(content, strict=False)

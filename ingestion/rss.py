@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 import asyncio
 import feedparser
-import httpx
+from ingestion.feed_http import fetch_feed_content
 from sqlalchemy import select
 
 from db import DbSession
@@ -22,14 +22,6 @@ logger = logging.getLogger(__name__)
 # Add more Investing.com feeds later without changing the ingestion logic.
 
 
-REQUEST_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0 Safari/537.36"
-    ),
-    "Accept": "application/rss+xml, application/xml;q=0.9, */*;q=0.8",
-}
 
 
 def _clean_text(value: str | None) -> str:
@@ -72,15 +64,8 @@ async def fetch_rss(feed_url: str) -> list[dict]:
 
     This function does not touch the database and does not invoke an LLM.
     """
-    async with httpx.AsyncClient(
-        headers=REQUEST_HEADERS,
-        follow_redirects=True,
-        timeout=20.0,
-    ) as client:
-        response = await client.get(feed_url)
-        response.raise_for_status()
-
-    feed = feedparser.parse(response.content)
+    content = await fetch_feed_content(feed_url)
+    feed = feedparser.parse(content)
 
     # feedparser can recover from some malformed XML. Only fail when
     # parsing failed and there are no usable entries.

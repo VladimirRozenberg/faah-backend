@@ -5,6 +5,7 @@ import logging
 from fastapi import APIRouter
 
 from ingestion import rss
+from ingestion.feed_http import FeedAccessError
 from models import DataSource
 from config.rss_feeds import RSS_FEEDS, RSSFeed
 from db import DbSession, AsyncSessionLocal
@@ -37,6 +38,13 @@ async def poll_rss_worker(feed: RSSFeed) -> None:
                         len(new_source_ids),
                     )
 
+            except FeedAccessError as exc:
+                logger.warning(
+                    "[%s] %s. Retrying in %d seconds; other feeds continue.",
+                    feed.name,
+                    exc,
+                    feed.poll_interval,
+                )
             except Exception:
                 logger.exception(
                     "[%s] RSS worker failed",
