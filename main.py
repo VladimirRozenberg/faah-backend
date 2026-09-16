@@ -91,11 +91,24 @@ async def lifespan(app: FastAPI):
         logger.info("All background workers stopped")
 
 
+# Keep documentation disabled unless a private path is configured.
+DOCS_PATH = os.getenv("DOCS_PATH", "").strip().rstrip("/") or None
+if DOCS_PATH and (
+    not DOCS_PATH.startswith("/")
+    or DOCS_PATH in {"/docs", "/redoc", "/openapi.json"}
+    or any(char in DOCS_PATH for char in "?#{}")
+):
+    raise ValueError("DOCS_PATH must be a non-default absolute URL path")
+
 app = FastAPI(
     title="FAAH API",
     description="API backend de l'application FAAH",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url=DOCS_PATH,
+    redoc_url=None,
+    openapi_url=f"{DOCS_PATH}/openapi.json" if DOCS_PATH else None,
+    swagger_ui_oauth2_redirect_url=None,
 )
 
 app.include_router(health.router)
