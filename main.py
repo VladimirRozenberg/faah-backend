@@ -131,8 +131,14 @@ RSS_URL = "https://www.investing.com/rss/news_25.rss"
 
 @app.get("/ingest-rss")
 async def ingest_rss(db: DbSession):
-
-    news = await rss.ingest_investing_stock_news(db)
+    feed = RSS_FEEDS[0]
+    news = await ingest_rss_feed(
+        db,
+        feed_name=feed.name,
+        feed_url=feed.url,
+        source_prefix=feed.source_prefix,
+        classify_articles=False,
+    )
 
     if not news:
         return {
@@ -140,8 +146,11 @@ async def ingest_rss(db: DbSession):
         }
 
     result = await db.execute(
-        select(DataSource).where(
-            DataSource.src_id.in_(news)
+        select(DataSource)
+        .where(DataSource.src_id.in_(news))
+        .order_by(
+            DataSource.src_created_at.desc(),
+            DataSource.src_id.desc(),
         )
     )
 
@@ -219,3 +228,7 @@ async def test_article_extraction(url : str):
             "message": "Failed to extract article content."
             }
     return article_content
+"""
+SOURCES : https://fastapi.tiangolo.com/ --DOCUMENTATION FASTAPI
+        https://docs.docker.com/compose/intro/features-uses/ --DOCUMENTATION DOCKER COMPOSE
+"""

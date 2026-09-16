@@ -329,6 +329,76 @@ INSERT INTO niches (nic_name, nic_category, nic_description) VALUES
         'Banks, payment providers, brokers, exchanges, insurers and other financial-service businesses.'
     ),
     (
+        'Central Banks, Interest Rates & Sovereign Bonds',
+        'Macroeconomics & Policy',
+        'Monetary-policy decisions, central-bank communication, interest-rate expectations, sovereign debt and rate-sensitive assets.'
+    ),
+    (
+        'Inflation, Labor Markets & Economic Growth',
+        'Macroeconomics & Policy',
+        'Inflation, employment, wages, consumer activity, business cycles and other economic data that can move financial markets.'
+    ),
+    (
+        'Financial Regulation, Enforcement & Compliance',
+        'Macroeconomics & Policy',
+        'Financial rules, investigations, enforcement actions, litigation and compliance developments affecting companies and markets.'
+    ),
+    (
+        'Corporate Earnings, Guidance & SEC Filings',
+        'Corporate Events & Capital Markets',
+        'Earnings results, forecasts and material company disclosures found in 8-K, 10-Q, 10-K and equivalent regulatory filings.'
+    ),
+    (
+        'M&A, Activism & Corporate Governance',
+        'Corporate Events & Capital Markets',
+        'Mergers, acquisitions, divestitures, activist campaigns, leadership changes, proxy matters and major governance events.'
+    ),
+    (
+        'IPOs, Venture Capital & Private Markets',
+        'Corporate Events & Capital Markets',
+        'Startup funding, private-market valuations, initial public offerings and other private-to-public capital formation.'
+    ),
+    (
+        'Crypto Assets, Exchanges & Blockchain Infrastructure',
+        'Digital Assets & Fintech',
+        'Cryptoassets, trading venues, custody, stablecoins, decentralized protocols and infrastructure supporting blockchain networks.'
+    ),
+    (
+        'Fintech, Payments & Digital Banking',
+        'Digital Assets & Fintech',
+        'Payment networks, financial software, digital banks, lending platforms and technology-led financial services.'
+    ),
+    (
+        'Renewable Energy, Utilities & Grid Infrastructure',
+        'Energy, Resources & Real Assets',
+        'Renewable power developers, regulated utilities, electricity markets, storage and transmission or distribution infrastructure.'
+    ),
+    (
+        'Energy Markets, Inventories & Commodity Flows',
+        'Energy, Resources & Real Assets',
+        'Oil, natural-gas and power-market balances, inventories, production, demand, trade flows and commodity pricing.'
+    ),
+    (
+        'Real Estate, REITs & Housing',
+        'Energy, Resources & Real Assets',
+        'Property companies, real-estate investment trusts, housing markets, construction activity and rate-sensitive property finance.'
+    ),
+    (
+        'Cybersecurity & Digital Resilience',
+        'Technology & AI',
+        'Security software, identity, cloud protection and businesses exposed to major cyber incidents or digital-resilience spending.'
+    ),
+    (
+        'Industrial Automation, Robotics & Supply Chains',
+        'Industrials & Financials',
+        'Automation, robotics, logistics, manufacturing technology and supply-chain infrastructure or disruption.'
+    ),
+    (
+        'Consumer, Retail & E-Commerce',
+        'Digital Consumer, Auto & Connectivity',
+        'Retailers, consumer brands, online commerce platforms and businesses driven by household demand and spending trends.'
+    ),
+    (
         'Other / Unclassified',
         'Other',
         'Fallback for an asset that does not yet have a clear match in the curated niche taxonomy.'
