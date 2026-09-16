@@ -83,11 +83,12 @@ async def analyze_source(
     response = await client.responses.create(
         model="deepseek-v4-flash",
         instructions=(
-            "You are a financial analyst performing detailed "
-            "financial analysis of financially significant information."
+            "You are a concise financial analyst. Use web search as the "
+            "default way to research and contextualize the underlying event, "
+            "not merely to inspect the supplied headline."
         ),
         input=prompt_text,
-        max_output_tokens=12000,
+        max_output_tokens=4000,
         reasoning={"effort": "high"},
         text={"format": {"type": "json_object"}},
         tools=[{"type": "web_search"}],

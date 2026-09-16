@@ -16,7 +16,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import JSONB
 
 from db import Base
+"""
+https://docs.sqlalchemy.org/en/20/tutorial/index.html
 
+Documentation SQLAlchemy ORM et tutorial d'utlisation
+"""
 
 # ============================================================
 # USERS

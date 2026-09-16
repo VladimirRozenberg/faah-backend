@@ -110,9 +110,10 @@ def generate_analysis_prompt(
 You are a financial analyst performing a deeper analysis of information that
 has already been identified as potentially financially significant.
 
-Analyze the source and determine its likely financial implications.
+Produce a concise, research-backed assessment of its likely financial
+implications.
 
-The source itself is the primary evidence.
+The supplied source is the starting point, not the full evidence base.
 The classification is preliminary context from an earlier processing stage.
 Use the classification to understand why the information was considered
 important, but do NOT assume that the classification is necessarily correct,
@@ -135,9 +136,22 @@ Determine:
   about the affected company, asset, industry, or market
 
 IMPORTANT:
-- Base the analysis primarily on the supplied source.
-- Use web search to verify the information from the URL given (if given)
-- If u cant access the URL try to verify it using other web sources and when making your analysis include a short sentence if u used web search or not and what sources it corresponded to from the web search -Give url and title.
+- Use web search for nearly every analysis. Do not decide whether to search
+  based only on the headline.
+- Treat the supplied source as a trigger for further research: open its URL
+  when available, search the underlying event, company, people, industry, and
+  relevant market context, and use what you find to improve the analysis.
+- Look for material facts or context missing from the supplied headline or
+  content, including original announcements, filings, official statements,
+  prior developments, and credible independent reporting.
+- Prefer recent primary sources and reputable financial reporting. Corroborate
+  important claims when practical and resolve conflicts between sources.
+- If the supplied URL is inaccessible, search for the same event using its
+  title, entities, and distinctive claims.
+- Skip web search only if the tool is unavailable or fails after a reasonable
+  attempt. If that happens, state the limitation briefly and reduce confidence.
+- The final assessment must be based on the combined evidence from the supplied
+  source, web research, and supplied price context—not on the headline alone.
 - Do not invent facts, prices, financial figures, company exposures, market
   reactions, or events that are not supported by the provided information.
 - Reasonable financial inference is allowed when the connection is clearly
@@ -212,23 +226,20 @@ Return ONLY valid JSON using EXACTLY this structure:
 FIELD DEFINITIONS:
 
 anl_response_text:
-The complete financial analysis.
+A compact financial assessment of 120-220 words. Lead with the conclusion,
+then briefly cover the key evidence, financial transmission mechanism,
+timeframe, and the most important uncertainty or counterargument. Include only
+details that materially affect the conclusion; do not retell the article.
 
-It should explain the event, its financial significance, the affected entities
-or markets, the causal mechanisms through which effects may occur, important
-positive and negative implications, uncertainties, and the likely timeframe.
-
-It should focus on interpretation and financial consequences rather than
-simply repeating the source.
-
-!! important list the urls and titles of any sources you used to verify the information in the source. If you did not use web search to verify the information, include a short sentence explaining why.
-and whether they should be used for wider analysis or not. 
-
-always include a short sentence if you used web search or not
+End with a compact "Web sources:" line listing the title and URL of each web
+source actually used. Normally include 2-4 useful sources. If web search was
+unavailable or failed, end with "Web search unavailable:" followed by a brief
+reason. Never claim that web search was unused merely because the supplied
+source seemed sufficient.
 
 anl_summary:
 A concise summary of the most important conclusion from the analysis.
-Prefer one to three sentences.
+Use one sentence, or two very short sentences at most.
 
 anl_direction:
 The likely direction of the underlying financial implications.
@@ -290,7 +301,7 @@ assets:
 Return one asset assessment for every symbol supplied in LINKED ASSETS.
 Use the exact supplied Yahoo Finance symbol and do not add unlisted symbols.
 Assess each asset independently because the same event may affect different
-assets in different directions.
+assets in different directions. Keep each reason to one concise sentence.
 
 signals:
 A list of concise, asset-specific analytical signals. Each signal must concern
@@ -356,6 +367,9 @@ SOURCE:
 
 SOURCE TYPE:
 {source.src_type}
+
+SOURCE URL:
+{source.src_original_url or "Not provided"}
 
 TITLE:
 {source.src_title}

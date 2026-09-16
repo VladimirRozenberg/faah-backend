@@ -119,10 +119,14 @@ async def ingest_rss_feed(
     feed_name: str,
     feed_url: str,
     source_prefix: str,
+    classify_articles: bool = True,
 ) -> list[int]:
     """
-    Fetch an RSS feed, insert new articles, and classify every
-    unprocessed article found in the current feed.
+    Fetch an RSS feed and insert new articles.
+
+    When requested, also classify every unprocessed article found in the
+    current feed. Workers keep this enabled; ingestion-only test routes can
+    disable it.
     """
     entries = await fetch_rss(feed_url)
 
@@ -145,11 +149,15 @@ async def ingest_rss_feed(
     new_sources: list[DataSource] = []
 
     # Existing articles whose earlier classification failed
-    source_ids_to_classify = [
-        source.src_id
-        for source in existing_sources.values()
-        if not source.src_is_processed
-    ]
+    source_ids_to_classify = (
+        [
+            source.src_id
+            for source in existing_sources.values()
+            if not source.src_is_processed
+        ]
+        if classify_articles
+        else []
+    )
 
     source_type = f"{source_prefix}:{feed_name}"
 
@@ -182,7 +190,8 @@ async def ingest_rss_feed(
             for source in new_sources
         ]
 
-        source_ids_to_classify.extend(new_source_ids)
+        if classify_articles:
+            source_ids_to_classify.extend(new_source_ids)
 
         # Save articles before classification.
         await db.commit()
@@ -222,5 +231,4 @@ async def ingest_rss_feed(
             )
 
     return new_source_ids
-
 
