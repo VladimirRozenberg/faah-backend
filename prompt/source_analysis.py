@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from decimal import Decimal
 
 from fastapi import HTTPException, status
@@ -30,29 +31,10 @@ from prompt.response_models import FinancialAnalysisResult
 logger = logging.getLogger(__name__)
 
 DEFAULT_ANALYSIS_MODEL = "qwen3.8-flash"
-MAX_ANALYSIS_WEB_SEARCH_CALLS = 3
-
-
-def get_final_message_text(response) -> str:
-    """Return text from the final message, excluding intermediate messages."""
-
-    for item in reversed(getattr(response, "output", None) or []):
-        if getattr(item, "type", None) != "message":
-            continue
-
-        text_parts = [
-            text
-            for content_item in (getattr(item, "content", None) or [])
-            if (text := getattr(content_item, "text", None))
-        ]
-        if text_parts:
-            return "".join(text_parts)
-
-    return getattr(response, "output_text", "") or ""
 
 
 def parse_analysis(content: str | None) -> FinancialAnalysisResult:
-    """Validate analysis JSON, accepting a fenced JSON object."""
+    """Validate analysis JSON, tolerating fences or brief leading prose."""
 
     if not content or not content.strip():
         raise ValueError("Alibaba returned empty analysis output")
@@ -63,9 +45,34 @@ def parse_analysis(content: str | None) -> FinancialAnalysisResult:
         cleaned = cleaned.removeprefix("```")
         cleaned = cleaned.removesuffix("```").strip()
 
-    return FinancialAnalysisResult.model_validate(
-        json.loads(cleaned, strict=False)
-    )
+    decoder = json.JSONDecoder(strict=False)
+    decode_error = None
+    data = None
+
+    for position, character in enumerate(cleaned):
+        if character != "{":
+            continue
+
+        try:
+            candidate, _ = decoder.raw_decode(cleaned[position:])
+        except json.JSONDecodeError as error:
+            decode_error = error
+            continue
+
+        if isinstance(candidate, dict):
+            data = candidate
+            break
+
+    if data is None:
+        logger.error(
+            "Alibaba analysis contained no valid JSON object: prefix=%r",
+            cleaned[:500],
+        )
+        if decode_error is not None:
+            raise decode_error
+        raise ValueError("Alibaba analysis contained no JSON object")
+
+    return FinancialAnalysisResult.model_validate(data)
 
 
 async def analyze_source(
@@ -124,60 +131,53 @@ async def analyze_source(
         .strip()
         or DEFAULT_ANALYSIS_MODEL
     )
-    response = await get_alibaba_client().responses.create(
+    response = await get_alibaba_client().chat.completions.create(
         model=analysis_model,
-        instructions=(
-            "You are a concise financial analyst. Use web search as the "
-            "default way to research and contextualize the underlying event, "
-            "not merely to inspect the supplied headline."
-        ),
-        input=prompt_text,
-        max_output_tokens=20000,
-        reasoning={"effort": "none"},
-        text={"format": {"type": "json_object"}},
-        tools=[{"type": "web_search"}],
-        tool_choice="auto",
-        max_tool_calls=MAX_ANALYSIS_WEB_SEARCH_CALLS,
-        parallel_tool_calls=False,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a concise financial analyst. Use web search to "
+                    "research and contextualize the underlying event, not "
+                    "merely to inspect the supplied headline. Return JSON only."
+                ),
+            },
+            {"role": "user", "content": prompt_text},
+        ],
+        max_tokens=20000,
+        response_format={"type": "json_object"},
+        extra_body={
+            "enable_search": True,
+            "search_options": {"search_strategy": "turbo"},
+            "enable_thinking": False,
+        },
     )
 
-    content = get_final_message_text(response)
-    output_types = [
-        getattr(item, "type", None)
-        for item in (getattr(response, "output", None) or [])
-    ]
-    web_search_count = output_types.count("web_search_call")
-    message_count = output_types.count("message")
+    content = response.choices[0].message.content
     logger.info(
-        "Alibaba analysis response: source_id=%s model=%s status=%r "
-        "web_search_calls=%d messages=%d output_types=%r usage=%r",
+        "Alibaba analysis response: source_id=%s model=%s "
+        "search_mode=turbo finish_reason=%r usage=%r",
         source_id,
         analysis_model,
-        getattr(response, "status", None),
-        web_search_count,
-        message_count,
-        output_types,
+        response.choices[0].finish_reason,
         getattr(response, "usage", None),
     )
-
-    if web_search_count == 0:
-        raise RuntimeError(
-            "Alibaba returned analysis without executing web search "
-            f"(model={analysis_model!r}, status="
-            f"{getattr(response, 'status', None)!r}, "
-            f"output_types={output_types!r})"
-        )
 
     if not content or not content.strip():
         raise RuntimeError(
             "Alibaba returned empty analysis output "
             f"(model={analysis_model!r}, "
-            f"status={getattr(response, 'status', None)!r}, "
-            f"incomplete_details={getattr(response, 'incomplete_details', None)!r}, "
+            f"finish_reason={response.choices[0].finish_reason!r}, "
             f"usage={getattr(response, 'usage', None)!r})"
         )
 
     analysis = parse_analysis(content)
+    if not re.search(r"https?://", analysis.anl_response_text):
+        logger.warning(
+            "Alibaba analysis omitted source URLs: source_id=%s model=%s",
+            source_id,
+            analysis_model,
+        )
 
     db_analysis = Analysis(
         anl_prm_id=db_prompt.prm_id,
