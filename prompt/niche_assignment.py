@@ -53,6 +53,7 @@ Return ONLY valid JSON in exactly this format:
 {{"niches": ["Exact niche name"]}}
 
 Rules:
+- Use only the supplied asset metadata and taxonomy. Do not browse the web.
 - Choose between 1 and 3 niches.
 - Use only exact niche names from AVAILABLE NICHES.
 - Multiple niches are allowed when each one clearly applies.

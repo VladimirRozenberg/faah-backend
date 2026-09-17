@@ -58,6 +58,8 @@ Return ONLY valid JSON using EXACTLY this structure:
 }}
 
 Rules:
+- Use only the supplied source, classification, niche context, and your existing
+  knowledge. Do not browse the web or claim external verification.
 - Return the exact Yahoo Finance symbols.
 - Examples: AAPL, BTC-USD, EURUSD=X or GC=F.
 - Return at most the 10 most relevant assets.
@@ -209,7 +211,10 @@ async def detect_and_save_assets(
     # model_validate contrôle notamment le symbole et la confiance (0 à 100).
     response = await client.responses.create(
         model="deepseek-v4-flash",
-        instructions="You identify Yahoo Finance asset symbols.",
+        instructions=(
+            "You identify Yahoo Finance asset symbols using only the supplied "
+            "context. Do not perform web research."
+        ),
         input=prompt,
         max_output_tokens=2000,
         reasoning={"effort": "none"},

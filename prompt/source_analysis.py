@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 from decimal import Decimal
 
 from fastapi import HTTPException, status
@@ -20,13 +21,51 @@ from models import (
     Signal,
     SourceClassification,
 )
-from prompt.llm_client import client
+from prompt.llm_client import get_alibaba_client
 from prompt.price_context import get_price_context
 from prompt.prompt_text import generate_analysis_prompt
 from prompt.response_models import FinancialAnalysisResult
 
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_ANALYSIS_MODEL = "qwen3.8-flash"
+MAX_ANALYSIS_WEB_SEARCH_CALLS = 3
+
+
+def get_final_message_text(response) -> str:
+    """Return text from the final message, excluding intermediate messages."""
+
+    for item in reversed(getattr(response, "output", None) or []):
+        if getattr(item, "type", None) != "message":
+            continue
+
+        text_parts = [
+            text
+            for content_item in (getattr(item, "content", None) or [])
+            if (text := getattr(content_item, "text", None))
+        ]
+        if text_parts:
+            return "".join(text_parts)
+
+    return getattr(response, "output_text", "") or ""
+
+
+def parse_analysis(content: str | None) -> FinancialAnalysisResult:
+    """Validate analysis JSON, accepting a fenced JSON object."""
+
+    if not content or not content.strip():
+        raise ValueError("Alibaba returned empty analysis output")
+
+    cleaned = content.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.removeprefix("```json")
+        cleaned = cleaned.removeprefix("```")
+        cleaned = cleaned.removesuffix("```").strip()
+
+    return FinancialAnalysisResult.model_validate(
+        json.loads(cleaned, strict=False)
+    )
 
 
 async def analyze_source(
@@ -80,33 +119,65 @@ async def analyze_source(
     db.add(db_prompt)
     await db.flush()
 
-    response = await client.responses.create(
-        model="deepseek-v4-flash",
+    analysis_model = (
+        os.getenv("FAAH_ALIBABA_ANALYSIS_MODEL", DEFAULT_ANALYSIS_MODEL)
+        .strip()
+        or DEFAULT_ANALYSIS_MODEL
+    )
+    response = await get_alibaba_client().responses.create(
+        model=analysis_model,
         instructions=(
             "You are a concise financial analyst. Use web search as the "
             "default way to research and contextualize the underlying event, "
             "not merely to inspect the supplied headline."
         ),
         input=prompt_text,
-        max_output_tokens=12000,
-        reasoning={"effort": "high"},
+        max_output_tokens=20000,
+        reasoning={"effort": "none"},
         text={"format": {"type": "json_object"}},
         tools=[{"type": "web_search"}],
+        tool_choice="auto",
+        max_tool_calls=MAX_ANALYSIS_WEB_SEARCH_CALLS,
+        parallel_tool_calls=False,
     )
 
-    content = response.output_text
+    content = get_final_message_text(response)
+    output_types = [
+        getattr(item, "type", None)
+        for item in (getattr(response, "output", None) or [])
+    ]
+    web_search_count = output_types.count("web_search_call")
+    message_count = output_types.count("message")
+    logger.info(
+        "Alibaba analysis response: source_id=%s model=%s status=%r "
+        "web_search_calls=%d messages=%d output_types=%r usage=%r",
+        source_id,
+        analysis_model,
+        getattr(response, "status", None),
+        web_search_count,
+        message_count,
+        output_types,
+        getattr(response, "usage", None),
+    )
+
+    if web_search_count == 0:
+        raise RuntimeError(
+            "Alibaba returned analysis without executing web search "
+            f"(model={analysis_model!r}, status="
+            f"{getattr(response, 'status', None)!r}, "
+            f"output_types={output_types!r})"
+        )
 
     if not content or not content.strip():
         raise RuntimeError(
-            "DeepSeek returned empty analysis output "
-            f"(status={getattr(response, 'status', None)!r}, "
+            "Alibaba returned empty analysis output "
+            f"(model={analysis_model!r}, "
+            f"status={getattr(response, 'status', None)!r}, "
             f"incomplete_details={getattr(response, 'incomplete_details', None)!r}, "
             f"usage={getattr(response, 'usage', None)!r})"
         )
 
-    analysis = FinancialAnalysisResult.model_validate(
-        json.loads(content, strict=False)
-    )
+    analysis = parse_analysis(content)
 
     db_analysis = Analysis(
         anl_prm_id=db_prompt.prm_id,

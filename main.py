@@ -32,6 +32,15 @@ from workers.workers import poll_rss_worker
 
 load_dotenv()
 
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+# Uvicorn configures its own named loggers before importing this module. Set
+# the root level explicitly so FAAH module logs are not left at WARNING.
+logging.getLogger().setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+
 logger = logging.getLogger(__name__)
 
 

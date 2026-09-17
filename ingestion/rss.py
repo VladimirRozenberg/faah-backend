@@ -3,19 +3,21 @@ from __future__ import annotations
 import html
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 import asyncio
 import feedparser
 from ingestion.feed_http import fetch_feed_content
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from db import DbSession
-from models import DataSource
+from models import Analysis, DataSource, SourceClassification
 
 from prompt.classification import classify_source
 
 logger = logging.getLogger(__name__)
+
+RETRY_WINDOW = timedelta(hours=2)
 
 
 # Start with one high-value feed.
@@ -115,8 +117,50 @@ async def ingest_rss_feed(
     """
     entries = await fetch_rss(feed_url)
 
+    source_type = f"{source_prefix}:{feed_name}"
+    retry_cutoff = (
+        datetime.now(timezone.utc) - RETRY_WINDOW
+    ).replace(tzinfo=None)
+
+    # Retry recent unfinished work even when an article has already rolled out
+    # of the feed response. Existing classifications are resumed rather than
+    # duplicated by classify_source.
+    retry_result = await db.scalars(
+        select(DataSource)
+        .outerjoin(
+            SourceClassification,
+            SourceClassification.cls_src_id == DataSource.src_id,
+        )
+        .outerjoin(
+            Analysis,
+            Analysis.anl_cls_id == SourceClassification.cls_id,
+        )
+        .where(
+            DataSource.src_type == source_type,
+            or_(
+                DataSource.src_published_at >= retry_cutoff,
+                and_(
+                    DataSource.src_published_at.is_(None),
+                    DataSource.src_created_at >= retry_cutoff,
+                ),
+            ),
+            or_(
+                DataSource.src_is_processed.is_(False),
+                and_(
+                    SourceClassification.cls_should_trigger.is_(True),
+                    Analysis.anl_id.is_(None),
+                ),
+            ),
+        )
+        .distinct()
+        .order_by(DataSource.src_created_at)
+    )
+    source_ids_to_classify = [
+        source.src_id for source in retry_result.all()
+    ]
+
     if not entries:
-        return []
+        entries = []
 
     urls = {entry["url"] for entry in entries}
 
@@ -133,18 +177,8 @@ async def ingest_rss_feed(
 
     new_sources: list[DataSource] = []
 
-    # Existing articles whose earlier classification failed
-    source_ids_to_classify = (
-        [
-            source.src_id
-            for source in existing_sources.values()
-            if not source.src_is_processed
-        ]
-        if classify_articles
-        else []
-    )
-
-    source_type = f"{source_prefix}:{feed_name}"
+    if not classify_articles:
+        source_ids_to_classify = []
 
     for entry in entries:
         if entry["url"] in existing_sources:
@@ -216,4 +250,3 @@ async def ingest_rss_feed(
             )
 
     return new_source_ids
-

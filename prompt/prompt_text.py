@@ -24,7 +24,10 @@ IMPORTANT:
   lawsuits, demand changes, supply disruptions, geopolitical events,
   technological developments, and similar events may be financially relevant
   even when stock prices or investing are never explicitly mentioned.
-- Do not assume that the information is necessarily true or accurate if information is unverified use websearch to verify.
+- Use only the supplied source and niche taxonomy. Do not browse the web or
+  claim that you independently verified the source.
+- This is a fast preliminary classification. Deeper analysis will verify the
+  event and gather external context later.
 
 Return ONLY valid JSON using EXACTLY this structure:
 
@@ -59,16 +62,21 @@ The likely directional implication of the information:
 
 cls_reason:
 Briefly explain why you chose the classification and whether the
-information could matter financially. Here you should use web search to verify the information and provide a short explanation of your reasoning. Also VERY IMPORTAN!!! include a short sentence if u used web search or not.
+information could matter financially based only on the supplied source. Keep
+the explanation short and do not discuss web-search usage.
 
 cls_should_trigger:
 Set to true ONLY when ALL of the following conditions are satisfied:
 
-The information is sufficiently credible.
+The source is sufficiently specific and internally plausible to warrant
+external verification during deeper analysis.
 The information is financially significant enough to justify deeper analysis.
 The information in this article is fresh meaning it is not old news (published within the last 2 hours)
 
-If the source appears fabricated, generic, misleading, materially incomplete, or cannot be reasonably verified despite searching for a supposedly real and recent event, set cls_should_trigger to false.
+If the supplied source is obviously fabricated, generic, contradictory,
+misleading, or too incomplete to identify a real event, set cls_should_trigger
+to false. Do not reject an otherwise specific source merely because external
+verification is unavailable at this stage.
 
 niches:
 Choose between 1 and 3 relevant niches from AVAILABLE NICHES below.
@@ -148,8 +156,8 @@ IMPORTANT:
   important claims when practical and resolve conflicts between sources.
 - If the supplied URL is inaccessible, search for the same event using its
   title, entities, and distinctive claims.
-- Skip web search only if the tool is unavailable or fails after a reasonable
-  attempt. If that happens, state the limitation briefly and reduce confidence.
+- Web search is mandatory for this analysis. If the tool fails, do not invent
+  research findings or claim that a search was performed.
 - The final assessment must be based on the combined evidence from the supplied
   source, web research, and supplied price context—not on the headline alone.
 - Do not invent facts, prices, financial figures, company exposures, market
@@ -232,10 +240,8 @@ timeframe, and the most important uncertainty or counterargument. Include only
 details that materially affect the conclusion; do not retell the article.
 
 End with a compact "Web sources:" line listing the title and URL of each web
-source actually used. Normally include 2-4 useful sources. If web search was
-unavailable or failed, end with "Web search unavailable:" followed by a brief
-reason. Never claim that web search was unused merely because the supplied
-source seemed sufficient.
+source actually used. Normally include 2-4 useful sources. Never claim that a
+web source was used unless it was returned by the web-search tool.
 
 anl_summary:
 A concise summary of the most important conclusion from the analysis.

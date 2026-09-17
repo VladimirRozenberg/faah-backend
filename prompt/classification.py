@@ -14,6 +14,7 @@ from sqlalchemy import select
 from assets.detection import detect_and_save_assets
 from db import DbSession
 from models import (
+    Analysis,
     ClassificationNiche,
     DataSource,
     Niche,
@@ -74,81 +75,127 @@ async def classify_source(source_id: int, db: DbSession):
             )
             return None
 
-    source.src_is_processed = True
-
-    niches = list(
-        (
-            await db.scalars(
-                select(Niche).order_by(Niche.nic_category, Niche.nic_name)
-            )
-        ).all()
+    db_classification = await db.scalar(
+        select(SourceClassification)
+        .where(SourceClassification.cls_src_id == source_id)
+        .order_by(SourceClassification.cls_created_at.desc())
+        .limit(1)
     )
 
-    prompt_text = generate_classification_prompt(source, niches)
-
-    # Record exactly what was sent to the LLM.
-    db_prompt = Prompt(
-        prm_name="Source classification",
-        prm_type="classification",
-        prm_version=1,
-        prm_prompt_text=prompt_text,
-    )
-
-    db.add(db_prompt)
-    await db.flush()
-
-    response = await client.responses.create(
-        model="deepseek-v4-flash",
-        instructions="You are a financial information classifier.",
-        input=prompt_text,
-        max_output_tokens=4000,
-        reasoning={"effort": "none"},
-        tools=[{"type": "web_search"}],
-        text={"format": {"type": "json_object"}},
-    )
-
-    classification = parse_classification(response.output_text)
-
-    db_classification = SourceClassification(
-        cls_src_id=source_id,
-        cls_prm_id=db_prompt.prm_id,
-        cls_category=classification.cls_category,
-        cls_importance=classification.cls_importance,
-        cls_sentiment=classification.cls_sentiment,
-        cls_should_trigger=classification.cls_should_trigger,
-        cls_reason=classification.cls_reason,
-    )
-
-    db.add(db_classification)
-    await db.flush()
-
-    niches_by_name = {niche.nic_name.casefold(): niche for niche in niches}
-    selected_niches = []
-    used_niche_ids = set()
-
-    for selected_name in classification.niches[:3]:
-        niche = niches_by_name.get(selected_name.strip().casefold())
-        if niche is not None and niche.nic_id not in used_niche_ids:
-            selected_niches.append(niche)
-            used_niche_ids.add(niche.nic_id)
-
-    if not selected_niches:
-        fallback = niches_by_name.get("other / unclassified")
-        if fallback is not None:
-            selected_niches = [fallback]
-
-    for niche in selected_niches:
-        db.add(
-            ClassificationNiche(
-                cln_cls_id=db_classification.cls_id,
-                cln_nic_id=niche.nic_id,
-            )
+    if db_classification is None:
+        niches = list(
+            (
+                await db.scalars(
+                    select(Niche).order_by(
+                        Niche.nic_category,
+                        Niche.nic_name,
+                    )
+                )
+            ).all()
         )
 
-    await db.commit()
-    await db.refresh(db_classification)
+        prompt_text = generate_classification_prompt(source, niches)
+
+        # Record exactly what was sent to the LLM.
+        db_prompt = Prompt(
+            prm_name="Source classification",
+            prm_type="classification",
+            prm_version=1,
+            prm_prompt_text=prompt_text,
+        )
+
+        db.add(db_prompt)
+        await db.flush()
+
+        response = await client.responses.create(
+            model="deepseek-v4-flash",
+            instructions=(
+                "You are a financial information classifier. Use only the "
+                "supplied source and taxonomy; do not perform web research."
+            ),
+            input=prompt_text,
+            max_output_tokens=4000,
+            reasoning={"effort": "none"},
+            text={"format": {"type": "json_object"}},
+        )
+
+        classification = parse_classification(response.output_text)
+
+        db_classification = SourceClassification(
+            cls_src_id=source_id,
+            cls_prm_id=db_prompt.prm_id,
+            cls_category=classification.cls_category,
+            cls_importance=classification.cls_importance,
+            cls_sentiment=classification.cls_sentiment,
+            cls_should_trigger=classification.cls_should_trigger,
+            cls_reason=classification.cls_reason,
+        )
+
+        db.add(db_classification)
+        await db.flush()
+
+        niches_by_name = {
+            niche.nic_name.casefold(): niche for niche in niches
+        }
+        selected_niches = []
+        used_niche_ids = set()
+
+        for selected_name in classification.niches[:3]:
+            niche = niches_by_name.get(selected_name.strip().casefold())
+            if niche is not None and niche.nic_id not in used_niche_ids:
+                selected_niches.append(niche)
+                used_niche_ids.add(niche.nic_id)
+
+        if not selected_niches:
+            fallback = niches_by_name.get("other / unclassified")
+            if fallback is not None:
+                selected_niches = [fallback]
+
+        for niche in selected_niches:
+            db.add(
+                ClassificationNiche(
+                    cln_cls_id=db_classification.cls_id,
+                    cln_nic_id=niche.nic_id,
+                )
+            )
+
+        # A triggered classification remains pending until its analysis is
+        # saved. A non-triggering classification is already terminal.
+        source.src_is_processed = not db_classification.cls_should_trigger
+        await db.commit()
+        await db.refresh(db_classification)
+    else:
+        logger.info(
+            "Resuming source %d from existing classification %d",
+            source_id,
+            db_classification.cls_id,
+        )
+
     classification_id = db_classification.cls_id
     should_trigger = db_classification.cls_should_trigger
+
+    if not should_trigger:
+        source.src_is_processed = True
+        await db.commit()
+        return (
+            db_classification,
+            "It's not a source that should trigger an analysis",
+        )
+
+    existing_analysis = await db.scalar(
+        select(Analysis)
+        .where(Analysis.anl_cls_id == classification_id)
+        .order_by(Analysis.anl_created_at.desc())
+        .limit(1)
+    )
+    if existing_analysis is not None:
+        source.src_is_processed = True
+        await db.commit()
+        return db_classification, existing_analysis
+
+    # Keep the source retryable until every required downstream step succeeds.
+    source.src_is_processed = False
+    await db.commit()
 
     try:
         await detect_and_save_assets(db_classification, db, client)
@@ -159,12 +206,6 @@ async def classify_source(source_id: int, db: DbSession):
         logger.exception(
             "Asset detection failed for classification %d",
             classification_id,
-        )
-
-    if not should_trigger:
-        return (
-            db_classification,
-            "It's not a source that should trigger an analysis",
         )
 
     for attempt in range(1, 4):
@@ -184,8 +225,17 @@ async def classify_source(source_id: int, db: DbSession):
             )
 
             if attempt == 3:
+                source = await db.get(DataSource, source_id)
+                if source is not None:
+                    source.src_is_processed = False
+                    await db.commit()
                 raise
 
             await asyncio.sleep(2)
+
+    source = await db.get(DataSource, source_id)
+    if source is not None:
+        source.src_is_processed = True
+        await db.commit()
 
     return db_classification, db_analysis
