@@ -11,6 +11,7 @@ from routers import (
     live_market,
     portfolios,
     signals,
+    favorites,
 )
 import prompt.prompts as prompts
 from prompt.classification import classify_source
@@ -132,6 +133,7 @@ app.include_router(prompts.router, prefix="/prompt")
 app.include_router(workers.router)
 app.include_router(login.router)
 app.include_router(gestion.router)
+app.include_router(favorites.router)
  
 
 
