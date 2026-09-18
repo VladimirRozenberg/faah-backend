@@ -12,6 +12,7 @@ from routers import (
     orchestrator,
     portfolios,
     signals,
+    favorites,
 )
 import prompt.prompts as prompts
 from db import DbSession
@@ -120,6 +121,7 @@ app.include_router(orchestrator.router)
 app.include_router(prompts.router, prefix="/prompt")
 app.include_router(login.router)
 app.include_router(gestion.router)
+app.include_router(favorites.router)
  
 
 
