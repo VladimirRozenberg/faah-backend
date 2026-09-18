@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from orchestrator_agent.schemas import (
+    CycleRecord,
     DecisionRecord,
     MemoryState,
     WorkerMetrics,
@@ -52,4 +53,14 @@ class JsonMemoryStore:
         metrics.failures += int(not report.success)
         metrics.items_processed += report.items_processed
         metrics.total_duration_ms += report.duration_ms
+        self.save(state)
+
+    def record_cycle(self, cycle: CycleRecord, max_cycles: int = 50) -> None:
+        """Persist the cursor and compact handoff for the next invocation."""
+
+        state = self.load()
+        state.last_cycle_at = cycle.started_at
+        state.next_instructions = cycle.next_instructions
+        state.cycles.append(cycle)
+        state.cycles = state.cycles[-max_cycles:]
         self.save(state)

@@ -12,8 +12,8 @@ class PolicyRejected(ValueError):
 @dataclass(frozen=True)
 class OrchestratorPolicy:
     allowed_feeds: frozenset[str]
-    min_rss_interval_seconds: int = 60
-    max_rss_interval_seconds: int = 86_400
+    min_rss_interval_seconds: int = 300
+    max_rss_interval_seconds: int = 7_200
     minimum_confidence: float = 0.60
 
     def authorize(self, proposal: DecisionProposal) -> Instruction:

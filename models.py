@@ -3,8 +3,10 @@ from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -507,6 +509,132 @@ class Prompt(Base):
 
 
 # ============================================================
+# RSS FEEDS AND SCHEDULER STATE
+# ============================================================
+
+class RSSFeed(Base):
+    """Database-owned RSS definition and current scheduling state."""
+
+    __tablename__ = "rss_feeds"
+    __table_args__ = (
+        CheckConstraint(
+            "rsf_poll_interval_seconds BETWEEN 300 AND 7200",
+            name="chk_rss_feed_poll_interval",
+        ),
+        CheckConstraint(
+            "rsf_status IN ('active', 'paused')",
+            name="chk_rss_feed_status",
+        ),
+        CheckConstraint(
+            "rsf_next_poll_trigger IN ('schedule', 'run_now')",
+            name="chk_rss_feed_next_trigger",
+        ),
+        Index("idx_rss_feeds_due", "rsf_status", "rsf_next_poll_at"),
+    )
+
+    rsf_id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+    rsf_name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    rsf_url: Mapped[str] = mapped_column(Text, nullable=False)
+    rsf_source_prefix: Mapped[str] = mapped_column(String, nullable=False)
+    rsf_poll_interval_seconds: Mapped[int] = mapped_column(
+        Integer,
+        default=3_600,
+        server_default="3600",
+        nullable=False,
+    )
+    rsf_status: Mapped[str] = mapped_column(
+        String,
+        default="active",
+        server_default="active",
+        nullable=False,
+    )
+    rsf_last_polled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    rsf_next_poll_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+    )
+    rsf_next_poll_trigger: Mapped[str] = mapped_column(
+        String,
+        default="schedule",
+        server_default="schedule",
+        nullable=False,
+    )
+    rsf_pending_instruction_id: Mapped[str | None] = mapped_column(String)
+    rsf_last_status: Mapped[str | None] = mapped_column(String)
+    rsf_last_items_processed: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+        nullable=False,
+    )
+    rsf_last_error: Mapped[str | None] = mapped_column(Text)
+    rsf_created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    rsf_updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
+class RSSFeedRun(Base):
+    """Auditable record of each scheduler-triggered feed execution."""
+
+    __tablename__ = "rss_feed_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "rfr_trigger IN ('schedule', 'run_now')",
+            name="chk_rss_feed_run_trigger",
+        ),
+        CheckConstraint(
+            "rfr_status IN ('running', 'succeeded', 'failed')",
+            name="chk_rss_feed_run_status",
+        ),
+        Index(
+            "idx_rss_feed_runs_feed_started",
+            "rfr_rsf_id",
+            "rfr_started_at",
+        ),
+    )
+
+    rfr_id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+    rfr_rsf_id: Mapped[int] = mapped_column(
+        ForeignKey("rss_feeds.rsf_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    rfr_trigger: Mapped[str] = mapped_column(String, nullable=False)
+    rfr_instruction_id: Mapped[str | None] = mapped_column(String)
+    rfr_status: Mapped[str] = mapped_column(String, nullable=False)
+    rfr_started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    rfr_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    rfr_items_processed: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+        nullable=False,
+    )
+    rfr_error: Mapped[str | None] = mapped_column(Text)
+
+
+# ============================================================
 # DATA SOURCES
 # ============================================================
 
@@ -755,6 +883,61 @@ class AnalysisInput(Base):
         ForeignKey("analyses.anl_id"),
         primary_key=True,
     )
+
+
+# ============================================================
+# ORCHESTRATOR ANALYSIS JOBS
+# ============================================================
+
+class OrchestratorAnalysisJob(Base):
+    """Persistent targeted research requested by an orchestration cycle."""
+
+    __tablename__ = "orchestrator_analysis_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "oaj_status IN ('pending', 'running', 'succeeded', 'failed')",
+            name="chk_orchestrator_analysis_job_status",
+        ),
+        CheckConstraint(
+            "oaj_priority BETWEEN 1 AND 5",
+            name="chk_orchestrator_analysis_job_priority",
+        ),
+        Index(
+            "idx_orchestrator_analysis_jobs_status_requested",
+            "oaj_status",
+            "oaj_requested_at",
+        ),
+    )
+
+    oaj_id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+    oaj_ast_id: Mapped[int] = mapped_column(
+        ForeignKey("assets.ast_id"),
+        nullable=False,
+    )
+    oaj_result_anl_id: Mapped[int | None] = mapped_column(
+        ForeignKey("analyses.anl_id", ondelete="SET NULL")
+    )
+    oaj_question: Mapped[str] = mapped_column(Text, nullable=False)
+    oaj_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    oaj_priority: Mapped[int] = mapped_column(Integer, nullable=False)
+    oaj_status: Mapped[str] = mapped_column(
+        String,
+        default="pending",
+        server_default="pending",
+        nullable=False,
+    )
+    oaj_error: Mapped[str | None] = mapped_column(Text)
+    oaj_requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    oaj_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    oaj_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 # ============================================================
