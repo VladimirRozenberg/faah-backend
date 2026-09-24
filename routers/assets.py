@@ -25,7 +25,7 @@ from assets.schemas import (
 )
 
 from db import DbSession
-from models import Asset, Crypto, Forex, Future, Stock
+from models import Asset, ClassificationAsset, Crypto, DataSource, Forex, Future, SourceClassification, Stock
 
 
 # Toutes les routes de ce fichier commencent par /api et sont regroupées
@@ -34,7 +34,7 @@ router = APIRouter(prefix="/api", tags=["Marché"])
 
 
 async def find_asset_or_404(db: DbSession, symbol: str) -> Asset:
-    """Recherche commune aux trois routes qui demandent un actif précis."""
+    """Recherche commune aux routes qui demandent un actif précis."""
 
     symbol = symbol.upper()
     asset = await db.scalar(select(Asset).where(Asset.ast_symbol == symbol))
@@ -206,6 +206,25 @@ def history_options() -> dict[str, list[str]]:
         period: sorted(intervals)
         for period, intervals in ALLOWED_PERIOD_INTERVALS.items()
     }
+
+
+@router.get("/assets/{symbol}/news")
+async def get_asset_news(symbol: str, db: DbSession) -> dict:
+    """Actualités liées à l'actif par une classification enregistrée en base."""
+    asset = await find_asset_or_404(db, symbol)
+
+    # Suivre les liens en base, sans rechercher le nom de l'actif dans le texte.
+    # DISTINCT évite les doublons si une actualité a plusieurs classifications.
+    result = await db.execute(
+        select(*DataSource.__table__.c)
+        .join(SourceClassification, SourceClassification.cls_src_id == DataSource.src_id)
+        .join(ClassificationAsset, ClassificationAsset.cla_cls_id == SourceClassification.cls_id)
+        .where(ClassificationAsset.cla_ast_id == asset.ast_id)
+        .distinct()
+        .order_by(DataSource.src_created_at.desc(), DataSource.src_id.desc())
+    )
+    items = [dict(row) for row in result.mappings().all()]
+    return {"count": len(items), "items": items}
 
 
 @router.get("/assets/{symbol}/logo", response_class=Response)
