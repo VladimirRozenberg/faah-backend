@@ -18,11 +18,11 @@ from models import (
     ClassificationNiche,
     DataSource,
     Niche,
-    Prompt,
     SourceClassification,
 )
 from prompt.llm_client import client
 from prompt.prompt_text import generate_classification_prompt
+from prompt.recording import record_prompt
 from prompt.response_models import ClassificationResult
 from prompt.source_analysis import analyze_source
 
@@ -96,23 +96,21 @@ async def classify_source(source_id: int, db: DbSession):
 
         prompt_text = generate_classification_prompt(source, niches)
 
-        # Record exactly what was sent to the LLM.
-        db_prompt = Prompt(
-            prm_name="Source classification",
-            prm_type="classification",
-            prm_version=1,
-            prm_prompt_text=prompt_text,
+        system_instructions = (
+            "You are a financial information classifier. Use only the "
+            "supplied source and taxonomy; do not perform web research."
         )
-
-        db.add(db_prompt)
-        await db.flush()
+        db_prompt = await record_prompt(
+            db,
+            name="Source classification",
+            prompt_type="classification",
+            system_instructions=system_instructions,
+            user_prompt=prompt_text,
+        )
 
         response = await client.responses.create(
             model="deepseek-v4-flash",
-            instructions=(
-                "You are a financial information classifier. Use only the "
-                "supplied source and taxonomy; do not perform web research."
-            ),
+            instructions=system_instructions,
             input=prompt_text,
             max_output_tokens=4000,
             reasoning={"effort": "none"},

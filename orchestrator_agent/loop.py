@@ -124,6 +124,7 @@ class OrchestrationLoop:
                 started_at=started_at,
                 signal_window_start=window_start,
                 signal_ids=[signal.signal_id for signal in signals],
+                prompt_id=brain_result.prompt_id,
                 situation_summary=decision.situation_summary,
                 follow_up_analysis=decision.follow_up_analysis,
                 created_follow_up_job_ids=[
@@ -141,6 +142,7 @@ class OrchestrationLoop:
             model=brain_result.model,
             raw_model_content=brain_result.raw_content,
             complete_model_response=brain_result.provider_response,
+            prompt_id=brain_result.prompt_id,
             created_follow_up_jobs=created_follow_up_jobs,
             approved_instructions=approved,
             rejected_rss_proposals=rejected,

@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from assets.repository import save_detected_assets
 from assets.schemas import DetectedAsset
 from prompt.niche_assignment import assign_niches_to_asset
+from prompt.recording import record_prompt
 from models import (
     Asset,
     AssetNiche,
@@ -209,12 +210,20 @@ async def detect_and_save_assets(
 
     # 3. Demander des symboles à l'IA, puis vérifier la structure du JSON.
     # model_validate contrôle notamment le symbole et la confiance (0 à 100).
+    system_instructions = (
+        "You identify Yahoo Finance asset symbols using only the supplied "
+        "context. Do not perform web research."
+    )
+    db_prompt = await record_prompt(
+        db,
+        name="Source asset detection",
+        prompt_type="asset_detection",
+        system_instructions=system_instructions,
+        user_prompt=prompt,
+    )
     response = await client.responses.create(
         model="deepseek-v4-flash",
-        instructions=(
-            "You identify Yahoo Finance asset symbols using only the supplied "
-            "context. Do not perform web research."
-        ),
+        instructions=system_instructions,
         input=prompt,
         max_output_tokens=2000,
         reasoning={"effort": "none"},
@@ -234,6 +243,7 @@ async def detect_and_save_assets(
         db,
         classification.cls_id,
         result.assets,
+        db_prompt.prm_id,
     )
 
     # 5. Attribuer des niches seulement aux actifs qui n'en ont pas encore.

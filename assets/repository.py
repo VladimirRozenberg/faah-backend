@@ -160,6 +160,7 @@ async def save_detected_assets(
     db: AsyncSession,
     classification_id: int,
     detected_assets: list[DetectedAsset],
+    prompt_id: int | None = None,
 ) -> list[Asset]:
     """Vérifie les symboles, crée les actifs et les relie à la classification."""
 
@@ -236,6 +237,7 @@ async def save_detected_assets(
 
         link.cla_relevance_confidence = detected.confidence
         link.cla_reason = detected.reason
+        link.cla_prm_id = prompt_id
 
         # Nouveau ou déjà connu : demander le logo seulement s’il manque.
         await fill_missing_logo(db, asset)

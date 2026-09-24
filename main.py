@@ -10,6 +10,7 @@ from routers import (
     health,
     live_market,
     orchestrator,
+    strategists,
     portfolios,
     signals,
     favorites,
@@ -24,6 +25,7 @@ from dotenv import load_dotenv
 import asyncio
 from contextlib import asynccontextmanager
 from orchestrator_agent.service import run_orchestrator_service
+from portfolio_strategist.service import run_strategist_service
 
 load_dotenv()
 
@@ -40,6 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 RUN_ORCHESTRATOR = os.getenv("RUN_ORCHESTRATOR", "false").lower() == "true"
+RUN_STRATEGISTS = os.getenv("RUN_STRATEGISTS", "false").lower() == "true"
 
 
 @asynccontextmanager
@@ -47,15 +50,26 @@ async def lifespan(app: FastAPI):
     background_tasks: list[asyncio.Task] = []
 
     if RUN_ORCHESTRATOR:
-        background_tasks = [
+        background_tasks.append(
             asyncio.create_task(
                 run_orchestrator_service(),
                 name="faah-orchestrator",
             )
-        ]
+        )
         logger.info("Started the PostgreSQL-backed orchestrator service")
     else:
         logger.info("Background orchestrator is disabled")
+
+    if RUN_STRATEGISTS:
+        background_tasks.append(
+            asyncio.create_task(
+                run_strategist_service(),
+                name="faah-portfolio-strategists",
+            )
+        )
+        logger.info("Started the opportunity and portfolio strategist service")
+    else:
+        logger.info("Portfolio strategist service is disabled")
 
     app.state.background_tasks = background_tasks
 
@@ -118,6 +132,7 @@ app.include_router(classifications.router)
 app.include_router(analyses.router)
 app.include_router(signals.router)
 app.include_router(orchestrator.router)
+app.include_router(strategists.router)
 app.include_router(prompts.router, prefix="/prompt")
 app.include_router(login.router)
 app.include_router(gestion.router)

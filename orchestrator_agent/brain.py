@@ -6,6 +6,8 @@ import json
 import os
 from typing import Protocol
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from orchestrator_agent.schemas import BrainResult, CycleContext, CycleDecision
 
 
@@ -85,12 +87,14 @@ def parse_cycle_decision(content: str | None) -> CycleDecision:
 class LLMOrchestrationBrain:
     """Use the same Alibaba/Qwen setup as FAAH's financial analysis."""
 
-    def __init__(self, model: str | None = None) -> None:
+    def __init__(self, db: AsyncSession, model: str | None = None) -> None:
+        self.db = db
         configured = model or os.getenv("FAAH_ALIBABA_ANALYSIS_MODEL", DEFAULT_MODEL)
         self.model = configured.strip() or DEFAULT_MODEL
 
     async def decide(self, context: CycleContext) -> BrainResult:
         from prompt.llm_client import get_alibaba_client
+        from prompt.recording import record_prompt
 
         model_input = (
             "CYCLE CONTEXT\n"
@@ -100,6 +104,16 @@ class LLMOrchestrationBrain:
             "REQUIRED OUTPUT JSON SCHEMA\n"
             f"{json.dumps(CycleDecision.model_json_schema(), indent=2)}"
         )
+        db_prompt = await record_prompt(
+            self.db,
+            name="Orchestrator cycle",
+            prompt_type="orchestration",
+            system_instructions=SYSTEM_INSTRUCTIONS,
+            user_prompt=model_input,
+        )
+        # The orchestrator has no database result row of its own. Commit the
+        # prompt before the network call so even a failed cycle is auditable.
+        await self.db.commit()
         response = await get_alibaba_client().chat.completions.create(
             model=self.model,
             messages=[
@@ -120,4 +134,5 @@ class LLMOrchestrationBrain:
             model=self.model,
             raw_content=content or "",
             provider_response=response.model_dump(mode="json"),
+            prompt_id=db_prompt.prm_id,
         )

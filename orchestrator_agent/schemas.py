@@ -197,12 +197,14 @@ class BrainResult(BaseModel):
     model: str
     raw_content: str
     provider_response: dict[str, Any]
+    prompt_id: int | None = None
 
 
 class CycleRecord(BaseModel):
     started_at: datetime
     signal_window_start: datetime
     signal_ids: list[int] = Field(default_factory=list)
+    prompt_id: int | None = None
     situation_summary: str
     follow_up_analysis: list[AnalysisFollowUp] = Field(default_factory=list)
     created_follow_up_job_ids: list[int] = Field(default_factory=list)
@@ -219,6 +221,7 @@ class CycleResult(BaseModel):
     model: str
     raw_model_content: str
     complete_model_response: dict[str, Any]
+    prompt_id: int | None = None
     created_follow_up_jobs: list[AnalysisFollowUpJobState] = Field(
         default_factory=list
     )

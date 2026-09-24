@@ -144,6 +144,11 @@ async def buy_asset(
     portfolio = await get_user_portfolio(db, user_id)
     asset = await find_asset(db, data.symbol)
 
+    # Every held asset must be visible to the live opportunity detector.
+    if not asset.ast_is_tracked:
+        asset.ast_is_tracked = True
+        asset.ast_updated_at = datetime.now()
+
     # Decimal conserve des calculs décimaux pour les montants enregistrés.
     # La conversion par str évite de reprendre les approximations d'un float.
     quantity = Decimal(str(data.quantity))

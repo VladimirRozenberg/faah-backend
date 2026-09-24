@@ -106,7 +106,7 @@ async def run_test_orchestration(
     return await OrchestrationLoop(
         agent,
         DatabaseContextProvider(db),
-        LLMOrchestrationBrain(),
+        LLMOrchestrationBrain(db),
         feed_state_provider=feed_repository,
         follow_up_repository=FollowUpAnalysisRepository(db),
     ).run_once(now)

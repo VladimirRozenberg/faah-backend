@@ -18,11 +18,11 @@ from models import (
     AnalysisInput,
     Asset,
     OrchestratorAnalysisJob,
-    Prompt,
 )
 from orchestrator_agent.schemas import AnalysisFollowUp, AnalysisFollowUpJobState
 from prompt.llm_client import get_alibaba_client
 from prompt.price_context import get_price_context
+from prompt.recording import record_prompt
 from prompt.response_models import FinancialAnalysisResult
 from prompt.source_analysis import DEFAULT_ANALYSIS_MODEL, parse_analysis
 
@@ -311,14 +311,18 @@ class FollowUpAnalysisExecutor:
             prior=prior,
             price_context=price_context,
         )
-        db_prompt = Prompt(
-            prm_name="Orchestrator targeted follow-up analysis",
-            prm_type="analysis_follow_up",
-            prm_version=1,
-            prm_prompt_text=prompt_text,
+        system_instructions = (
+            "You are a skeptical financial research analyst. Resolve "
+            "the supplied follow-up question using the prior analyses "
+            "as fallible context and current web research. Return JSON only."
         )
-        self.repository.session.add(db_prompt)
-        await self.repository.session.flush()
+        db_prompt = await record_prompt(
+            self.repository.session,
+            name="Orchestrator targeted follow-up analysis",
+            prompt_type="analysis_follow_up",
+            system_instructions=system_instructions,
+            user_prompt=prompt_text,
+        )
 
         model = (
             os.getenv("FAAH_ALIBABA_ANALYSIS_MODEL", DEFAULT_ANALYSIS_MODEL).strip()
@@ -329,11 +333,7 @@ class FollowUpAnalysisExecutor:
             messages=[
                 {
                     "role": "system",
-                    "content": (
-                        "You are a skeptical financial research analyst. Resolve "
-                        "the supplied follow-up question using the prior analyses "
-                        "as fallible context and current web research. Return JSON only."
-                    ),
+                    "content": system_instructions,
                 },
                 {"role": "user", "content": prompt_text},
             ],

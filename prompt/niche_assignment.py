@@ -10,6 +10,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Asset, AssetNiche, Niche, Stock
+from prompt.recording import record_prompt
+
+
+NICHE_SYSTEM_INSTRUCTIONS = (
+    "You assign one financial asset to a fixed niche taxonomy."
+)
 
 
 class NicheSelection(BaseModel):
@@ -104,11 +110,16 @@ async def assign_niches_to_asset(
     prompt = generate_niche_assignment_prompt(asset, stock, niches)
 
     try:
+        db_prompt = await record_prompt(
+            db,
+            name="Asset niche assignment",
+            prompt_type="niche_assignment",
+            system_instructions=NICHE_SYSTEM_INSTRUCTIONS,
+            user_prompt=prompt,
+        )
         response = await client.responses.create(
             model="deepseek-v4-flash",
-            instructions=(
-                "You assign one financial asset to a fixed niche taxonomy."
-            ),
+            instructions=NICHE_SYSTEM_INSTRUCTIONS,
             input=prompt,
             max_output_tokens=300,
             reasoning={"effort": "none"},
@@ -142,26 +153,18 @@ async def assign_niches_to_asset(
         if not selected_niches:
             raise ValueError("DeepSeek returned no valid niche")
 
-        existing_niche_ids = set(
-            (
-                await db.scalars(
-                    select(AssetNiche.ani_nic_id).where(
-                        AssetNiche.ani_ast_id == asset.ast_id
-                    )
-                )
-            ).all()
-        )
         created = 0
 
         for niche in selected_niches:
-            if niche.nic_id not in existing_niche_ids:
-                db.add(
-                    AssetNiche(
-                        ani_ast_id=asset.ast_id,
-                        ani_nic_id=niche.nic_id,
-                    )
+            link = await db.get(AssetNiche, (asset.ast_id, niche.nic_id))
+            if link is None:
+                link = AssetNiche(
+                    ani_ast_id=asset.ast_id,
+                    ani_nic_id=niche.nic_id,
                 )
+                db.add(link)
                 created += 1
+            link.ani_prm_id = db_prompt.prm_id
 
         await db.commit()
 
@@ -227,11 +230,16 @@ async def assign_niches_to_all_assets(
         prompt = generate_niche_assignment_prompt(asset, stock, niches)
 
         try:
+            db_prompt = await record_prompt(
+                db,
+                name="Asset niche assignment",
+                prompt_type="niche_assignment",
+                system_instructions=NICHE_SYSTEM_INSTRUCTIONS,
+                user_prompt=prompt,
+            )
             response = await client.responses.create(
                 model="deepseek-v4-flash",
-                instructions=(
-                    "You assign one financial asset to a fixed niche taxonomy."
-                ),
+                instructions=NICHE_SYSTEM_INSTRUCTIONS,
                 input=prompt,
                 max_output_tokens=300,
                 reasoning={"effort": "none"},
@@ -262,15 +270,16 @@ async def assign_niches_to_all_assets(
             created_for_asset = 0
             for niche in selected_niches:
                 link_key = (asset.ast_id, niche.nic_id)
-                if link_key not in existing_links:
-                    db.add(
-                        AssetNiche(
-                            ani_ast_id=asset.ast_id,
-                            ani_nic_id=niche.nic_id,
-                        )
+                link = await db.get(AssetNiche, link_key)
+                if link is None:
+                    link = AssetNiche(
+                        ani_ast_id=asset.ast_id,
+                        ani_nic_id=niche.nic_id,
                     )
+                    db.add(link)
                     existing_links.add(link_key)
                     created_for_asset += 1
+                link.ani_prm_id = db_prompt.prm_id
 
             await db.commit()
             links_created += created_for_asset

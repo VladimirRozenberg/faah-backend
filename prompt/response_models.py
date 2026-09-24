@@ -54,12 +54,14 @@ class FinancialAnalysisResult(BaseModel):
         "mixed",
     ]
     anl_confidence: int = Field(ge=0, le=100)
-    anl_risk_level: Literal["low", "medium", "high"]
+    # Conservative fallbacks keep otherwise useful research when a provider
+    # omits these two top-level labels. Missing risk must never become "low".
+    anl_risk_level: Literal["low", "medium", "high"] = "high"
     anl_timeframe: Literal[
         "short-term",
         "medium-term",
         "long-term",
         "multiple",
-    ]
+    ] = "multiple"
     assets: list[AssetAnalysisResult] = Field(default_factory=list)
     signals: list[AnalysisSignalResult] = Field(default_factory=list)

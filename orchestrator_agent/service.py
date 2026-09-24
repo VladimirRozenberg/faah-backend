@@ -38,8 +38,6 @@ async def run_orchestrator_service() -> None:
         )
     else:
         next_orchestration_at = datetime.now(timezone.utc)
-    brain = LLMOrchestrationBrain()
-
     try:
         while True:
             async with AsyncSessionLocal() as db:
@@ -71,7 +69,7 @@ async def run_orchestrator_service() -> None:
                     result = await OrchestrationLoop(
                         orchestrator,
                         DatabaseContextProvider(db),
-                        brain,
+                        LLMOrchestrationBrain(db),
                         feed_state_provider=feed_repository,
                         follow_up_repository=FollowUpAnalysisRepository(db),
                     ).run_once(now)

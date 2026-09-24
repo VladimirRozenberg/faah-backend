@@ -18,13 +18,13 @@ from models import (
     Asset,
     ClassificationAsset,
     DataSource,
-    Prompt,
     Signal,
     SourceClassification,
 )
 from prompt.llm_client import get_alibaba_client
 from prompt.price_context import get_price_context
 from prompt.prompt_text import generate_analysis_prompt
+from prompt.recording import record_prompt
 from prompt.response_models import FinancialAnalysisResult
 
 
@@ -115,16 +115,18 @@ async def analyze_source(
         asset_context=asset_context,
     )
 
-    # Record exactly what was sent to the LLM.
-    db_prompt = Prompt(
-        prm_name="Source financial analysis",
-        prm_type="analysis",
-        prm_version=1,
-        prm_prompt_text=prompt_text,
+    system_instructions = (
+        "You are a concise financial analyst. Use web search to "
+        "research and contextualize the underlying event, not "
+        "merely to inspect the supplied headline. Return JSON only."
     )
-
-    db.add(db_prompt)
-    await db.flush()
+    db_prompt = await record_prompt(
+        db,
+        name="Source financial analysis",
+        prompt_type="analysis",
+        system_instructions=system_instructions,
+        user_prompt=prompt_text,
+    )
 
     analysis_model = (
         os.getenv("FAAH_ALIBABA_ANALYSIS_MODEL", DEFAULT_ANALYSIS_MODEL)
@@ -136,11 +138,7 @@ async def analyze_source(
         messages=[
             {
                 "role": "system",
-                "content": (
-                    "You are a concise financial analyst. Use web search to "
-                    "research and contextualize the underlying event, not "
-                    "merely to inspect the supplied headline. Return JSON only."
-                ),
+                "content": system_instructions,
             },
             {"role": "user", "content": prompt_text},
         ],

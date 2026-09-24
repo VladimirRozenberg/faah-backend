@@ -30,3 +30,20 @@ async def get_latest_quote(symbol: str) -> LiveQuote | None:
 
     # Reconstruire le cours à partir du JSON et vérifier ses types.
     return LiveQuote.model_validate_json(data)
+
+
+async def save_opportunity_sample(quote: LiveQuote) -> None:
+    """Keep the last minute-level sample used by the opportunity detector."""
+
+    key = f"market:opportunity-sample:{quote.symbol}"
+    await redis_client.set(key, quote.model_dump_json(), ex=CACHE_TTL_SECONDS)
+
+
+async def get_opportunity_sample(symbol: str) -> LiveQuote | None:
+    """Return the preceding opportunity-detector sample for one asset."""
+
+    key = f"market:opportunity-sample:{symbol}"
+    data = await redis_client.get(key)
+    if data is None:
+        return None
+    return LiveQuote.model_validate_json(data)

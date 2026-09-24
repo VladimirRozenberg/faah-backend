@@ -176,6 +176,10 @@ class AssetNiche(Base):
         primary_key=True,
     )
 
+    ani_prm_id: Mapped[int | None] = mapped_column(
+        ForeignKey("prompts.prm_id", ondelete="SET NULL")
+    )
+
 
 # ============================================================
 # FAVORITES
@@ -759,6 +763,10 @@ class ClassificationAsset(Base):
         primary_key=True,
     )
 
+    cla_prm_id: Mapped[int | None] = mapped_column(
+        ForeignKey("prompts.prm_id", ondelete="SET NULL")
+    )
+
     cla_relevance_confidence: Mapped[int | None] = mapped_column(Integer)
 
     cla_reason: Mapped[str | None] = mapped_column(Text)
@@ -1006,3 +1014,199 @@ class Signal(Base):
         server_default=func.now(),
         nullable=False,
     )
+
+
+# ============================================================
+# PORTFOLIO STRATEGISTS AND MARKET OPPORTUNITIES
+# ============================================================
+
+class PortfolioStrategist(Base):
+    """Persistent identity and scheduling cursor for one portfolio strategist."""
+
+    __tablename__ = "portfolio_strategists"
+    __table_args__ = (
+        CheckConstraint(
+            "pst_status IN ('active', 'paused')",
+            name="chk_portfolio_strategist_status",
+        ),
+        Index("idx_portfolio_strategists_due", "pst_status", "pst_next_full_review_at"),
+    )
+
+    pst_id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+    pst_prt_id: Mapped[int] = mapped_column(
+        ForeignKey("portfolios.prt_id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+    )
+    pst_status: Mapped[str] = mapped_column(
+        String,
+        default="active",
+        server_default="active",
+        nullable=False,
+    )
+    pst_instructions: Mapped[str | None] = mapped_column(Text)
+    pst_last_signal_id: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+        nullable=False,
+    )
+    pst_last_full_review_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    pst_next_full_review_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    pst_last_summary: Mapped[str | None] = mapped_column(Text)
+    pst_created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    pst_updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
+class MarketOpportunityEvent(Base):
+    """A material price movement awaiting shared analysis and dispatch."""
+
+    __tablename__ = "market_opportunity_events"
+    __table_args__ = (
+        CheckConstraint(
+            "moe_event_type IN ('price_rise', 'price_drop')",
+            name="chk_market_opportunity_event_type",
+        ),
+        CheckConstraint(
+            "moe_status IN ('detected', 'analyzing', 'analyzed', "
+            "'notified', 'failed')",
+            name="chk_market_opportunity_event_status",
+        ),
+        Index("idx_market_opportunity_events_status", "moe_status", "moe_detected_at"),
+    )
+
+    moe_id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+    moe_ast_id: Mapped[int] = mapped_column(
+        ForeignKey("assets.ast_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    moe_result_anl_id: Mapped[int | None] = mapped_column(
+        ForeignKey("analyses.anl_id", ondelete="SET NULL")
+    )
+    moe_event_type: Mapped[str] = mapped_column(String, nullable=False)
+    moe_price_before: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    moe_price_after: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    moe_change_pct: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+    moe_window_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    moe_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    moe_status: Mapped[str] = mapped_column(
+        String,
+        default="detected",
+        server_default="detected",
+        nullable=False,
+    )
+    moe_error: Mapped[str | None] = mapped_column(Text)
+    moe_detected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    moe_analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PortfolioStrategistRun(Base):
+    """Queue item and audit record for targeted and full strategist reviews."""
+
+    __tablename__ = "portfolio_strategist_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "psr_review_type IN ('targeted_signal', 'targeted_price', 'full')",
+            name="chk_portfolio_strategist_run_type",
+        ),
+        CheckConstraint(
+            "psr_status IN ('pending', 'running', 'succeeded', 'failed', 'merged')",
+            name="chk_portfolio_strategist_run_status",
+        ),
+        CheckConstraint(
+            "psr_priority BETWEEN 1 AND 5",
+            name="chk_portfolio_strategist_run_priority",
+        ),
+        Index(
+            "idx_portfolio_strategist_runs_pending",
+            "psr_status",
+            "psr_priority",
+            "psr_created_at",
+        ),
+        Index(
+            "uq_portfolio_strategist_run_signal",
+            "psr_pst_id",
+            "psr_sig_id",
+            unique=True,
+        ),
+        Index(
+            "uq_portfolio_strategist_run_event",
+            "psr_pst_id",
+            "psr_moe_id",
+            unique=True,
+        ),
+    )
+
+    psr_id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+    psr_pst_id: Mapped[int] = mapped_column(
+        ForeignKey("portfolio_strategists.pst_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    psr_ast_id: Mapped[int | None] = mapped_column(
+        ForeignKey("assets.ast_id", ondelete="SET NULL")
+    )
+    psr_sig_id: Mapped[int | None] = mapped_column(
+        ForeignKey("signals.sig_id", ondelete="SET NULL")
+    )
+    psr_moe_id: Mapped[int | None] = mapped_column(
+        ForeignKey("market_opportunity_events.moe_id", ondelete="SET NULL")
+    )
+    psr_result_anl_id: Mapped[int | None] = mapped_column(
+        ForeignKey("analyses.anl_id", ondelete="SET NULL")
+    )
+    psr_prm_id: Mapped[int | None] = mapped_column(
+        ForeignKey("prompts.prm_id", ondelete="SET NULL")
+    )
+    psr_review_type: Mapped[str] = mapped_column(String, nullable=False)
+    psr_status: Mapped[str] = mapped_column(
+        String,
+        default="pending",
+        server_default="pending",
+        nullable=False,
+    )
+    psr_priority: Mapped[int] = mapped_column(
+        Integer,
+        default=3,
+        server_default="3",
+        nullable=False,
+    )
+    psr_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    psr_decision: Mapped[dict | None] = mapped_column(JSONB)
+    psr_error: Mapped[str | None] = mapped_column(Text)
+    psr_created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    psr_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    psr_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
