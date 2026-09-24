@@ -13,7 +13,7 @@ from schemas import TokenResponse, UserResponse
 
 TOKEN_HEX_KEY = os.getenv("hex_code")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 240
 
 
 # ---------------------------------------------------------------------
@@ -60,7 +60,7 @@ class AuthService:
         return jwt.encode(payload, TOKEN_HEX_KEY, algorithm=ALGORITHM)
 
     def _to_user_response(self, user: models.User) -> UserResponse:
-        return UserResponse(user_id=user.usr_id, username=user.usr_username, role=user.usr_role)
+        return UserResponse(user_id=user.usr_id, username=user.usr_username, role=user.usr_role, email=user.usr_email, is_active=user.usr_is_active, balance=float(user.usr_balance))
 
     async def login(self, username: str, password: str, db) -> TokenResponse:
         """Vérifie les identifiants et retourne un token d'accès."""
@@ -108,13 +108,13 @@ class AuthService:
         try:
             payload = jwt.decode(token, TOKEN_HEX_KEY, algorithms=[ALGORITHM])
         except jwt.ExpiredSignatureError as error:
-            raise TokenError("Token expiré, merci de te reconnecter.") from error
+            raise TokenError("Your session has expired. Please sign in again.") from error
         except jwt.InvalidTokenError as error:
-            raise TokenError("Token invalide.") from error
+            raise TokenError("Invalid session token.") from error
 
         user_id = payload.get("sub")
         if user_id is None:
-            raise TokenError("Token mal formé.")
+            raise TokenError("Malformed session token.")
 
         query = select(models.User).where(models.User.usr_id == int(user_id))
         result = await db.execute(query)
@@ -127,3 +127,4 @@ class AuthService:
 
 
 auth_service = AuthService()
+

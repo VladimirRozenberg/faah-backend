@@ -1,7 +1,8 @@
+
+
 """Formats des demandes et des réponses du portefeuille."""
 
 from datetime import datetime
-
 from pydantic import BaseModel, Field
 
 
@@ -10,16 +11,16 @@ class BuyAssetRequest(BaseModel):
 
     # Pydantic exige un symbole non vide et des nombres strictement positifs.
     symbol: str = Field(min_length=1)
-    quantity: float = Field(gt=0)
-    purchase_price: float = Field(gt=0)
+    quantity: float = Field(gt=0, allow_inf_nan=False)
+    purchase_price: float = Field(gt=0, allow_inf_nan=False)
 
 
 class SellAssetRequest(BaseModel):
     """Vente simulée envoyée par Avalonia."""
 
     symbol: str = Field(min_length=1)
-    quantity: float = Field(gt=0)
-    sale_price: float = Field(gt=0)
+    quantity: float = Field(gt=0, allow_inf_nan=False)
+    sale_price: float = Field(gt=0, allow_inf_nan=False)
 
 
 class TransactionResponse(BaseModel):
@@ -37,11 +38,21 @@ class TransactionResponse(BaseModel):
     created_at: datetime
 
 
+class AssetTransactionSummary(BaseModel):
+    asset_id: int
+    symbol: str
+    name: str
+    transaction_count: int
+    buy_count: int
+    sell_count: int
+
+
 class TransactionListResponse(BaseModel):
     """Historique des transactions d'un portefeuille."""
 
     count: int
     transactions: list[TransactionResponse]
+    by_asset: list[AssetTransactionSummary]
 
 
 class PortfolioPositionResponse(BaseModel):
@@ -73,7 +84,9 @@ class PortfolioResponse(BaseModel):
     created_at: datetime
     positions_count: int
     # Montant d'achat des positions encore détenues ; ce n'est pas un solde.
+    balance: float
     total_invested: float
     total_current_value: float | None
     total_profit_loss: float | None
     positions: list[PortfolioPositionResponse]
+

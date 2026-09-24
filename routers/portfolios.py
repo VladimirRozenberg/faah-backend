@@ -19,6 +19,7 @@ from portfolio.schemas import (
 
 router = APIRouter(prefix="/api", tags=["Portefeuilles"])
 
+
 # Les routes reçoivent la demande et appellent portfolio.repository.
 # Les calculs et les écritures restent dans ce dossier pour éviter les doublons.
 # DbSession fournit la session de base de données pour la demande en cours.
@@ -102,3 +103,4 @@ async def get_portfolio_transactions(
         return await read_transactions(db, user_id)
     except LookupError as error:
         raise create_http_error(error) from error
+

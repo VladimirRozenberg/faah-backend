@@ -33,13 +33,13 @@ def raise_http_error(error: Exception) -> None:
     """Convertit les erreurs du service en réponses HTTP compréhensibles."""
 
     if isinstance(error, InvalidCredentialsError):
-        raise HTTPException(status_code=401, detail="Nom d'utilisateur ou mot de passe incorrect.") from error
+        raise HTTPException(status_code=401, detail="Incorrect username or password.") from error
     if isinstance(error, UsernameTakenError):
-        raise HTTPException(status_code=409, detail="Ce nom d'utilisateur ou cet email est déjà pris.") from error
+        raise HTTPException(status_code=409, detail="This username or email is already in use.") from error
     if isinstance(error, TokenError):
         raise HTTPException(status_code=401, detail=str(error)) from error
     if isinstance(error, UserNotFoundError):
-        raise HTTPException(status_code=401, detail="Utilisateur introuvable.") from error
+        raise HTTPException(status_code=401, detail="User not found.") from error
     raise error
 
 

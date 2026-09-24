@@ -1,7 +1,9 @@
 """Routes HTTP réservées au super-administrateur."""
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, Field
+from decimal import Decimal
+from portfolio.repository import deposit_cash
 
 from auth.login import CurrentUser
 from auth.authService import UsernameTakenError, UserNotFoundError
@@ -19,9 +21,9 @@ def raise_http_error(error: Exception) -> None:
     """Convertit les erreurs du service en réponses HTTP compréhensibles."""
 
     if isinstance(error, UserNotFoundError):
-        raise HTTPException(status_code=404, detail="Utilisateur introuvable.") from error
+        raise HTTPException(status_code=404, detail="User not found.") from error
     if isinstance(error, UsernameTakenError):
-        raise HTTPException(status_code=409, detail="Ce nom d'utilisateur ou cet email est déjà pris.") from error
+        raise HTTPException(status_code=409, detail="This username or email is already in use.") from error
     if isinstance(error, SelfLockoutError):
         raise HTTPException(status_code=400, detail=str(error)) from error
     raise error
@@ -31,7 +33,7 @@ def get_current_admin(user: CurrentUser) -> UserResponse:
     """Exige un utilisateur authentifié ET avec le rôle admin."""
 
     if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Accès réservé au super-administrateur.")
+        raise HTTPException(status_code=403, detail="Administrator access is required.")
     return user
 
 
@@ -49,7 +51,7 @@ class RoleUpdate(BaseModel):
     @classmethod
     def role_valide(cls, v):
         if v not in ("employe", "admin"):
-            raise ValueError("Le rôle doit être 'employe' ou 'admin'.")
+            raise ValueError("The role must be 'employe' or 'admin'.")
         return v
 
 
@@ -63,7 +65,7 @@ class AdminCreateUserRequest(BaseModel):
     @classmethod
     def role_valide(cls, v):
         if v not in ("employe", "admin"):
-            raise ValueError("Le rôle doit être 'employe' ou 'admin'.")
+            raise ValueError("The role must be 'employe' or 'admin'.")
         return v
 
 
@@ -113,3 +115,17 @@ async def creer_utilisateur(
     except Exception as error:
         raise_http_error(error)
         raise
+
+class DepositRequest(BaseModel):
+    amount: Decimal = Field(gt=0, le=1000000000, max_digits=12, decimal_places=2, allow_inf_nan=False)
+
+
+@router.post("/utilisateurs/{user_id}/deposit")
+async def recharge_compte(user_id: int, data: DepositRequest, db: DbSession, admin: UserResponse = AdminUser):
+    try:
+        return await deposit_cash(db, user_id, data.amount)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+

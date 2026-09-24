@@ -74,6 +74,13 @@ class User(Base):
         server_default="employe",
         nullable=False,
     )
+
+    usr_balance: Mapped[Decimal] = mapped_column(
+        Numeric(24, 8),
+        default=Decimal("0"),
+        server_default="0",
+        nullable=False,
+    )   
  
 
 

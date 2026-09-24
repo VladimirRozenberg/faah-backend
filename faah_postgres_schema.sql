@@ -76,7 +76,8 @@ CREATE TABLE users (
 
     usr_is_active BOOLEAN NOT NULL DEFAULT TRUE,
     usr_created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    usr_role VARCHAR NOT NULL DEFAULT 'employe'
+    usr_role VARCHAR NOT NULL DEFAULT 'employe',
+    usr_balance NUMERIC(24,8) NOT NULL DEFAULT 0
 
 );
 
