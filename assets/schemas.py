@@ -39,6 +39,8 @@ class MarketListResponse(BaseModel):
     """Prix des actifs disponibles dans le marché."""
 
     count: int
+    page: int
+    page_size: int 
     items: list[AssetSummary]
 
 
@@ -79,6 +81,8 @@ class AssetListResponse(BaseModel):
     """Liste des actifs enregistrés dans PostgreSQL."""
 
     count: int
+    page: int
+    page_size :int
     items: list[AssetItem]
 
 

@@ -4,7 +4,7 @@ import asyncio
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Response
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from assets.market_data import (
@@ -24,8 +24,20 @@ from assets.schemas import (
     MarketListResponse,
 )
 
+from auth.login import CurrentUser
 from db import DbSession
-from models import Asset, ClassificationAsset, Crypto, DataSource, Forex, Future, SourceClassification, Stock
+from models import (
+    Asset,
+    ClassificationAsset,
+    Crypto,
+    DataSource,
+    Favorite,
+    Forex,
+    Future,
+    SourceClassification,
+    Stock,
+)
+
 
 
 # Toutes les routes de ce fichier commencent par /api et sont regroupées
@@ -117,40 +129,106 @@ def create_http_error(error: Exception) -> HTTPException:
 
 
 @router.get("/assets", response_model=AssetListResponse)
-async def list_assets(db: DbSession) -> AssetListResponse:
-    """Retourne tous les actifs enregistrés dans PostgreSQL."""
+async def list_assets(
+    db: DbSession,
+    user: CurrentUser,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> AssetListResponse:
+    """Retourne une page d'actifs, avec les favoris en premier."""
+
+    total = await db.scalar(
+        select(func.count()).select_from(Asset)
+    ) or 0
+
+    favorite_asset_ids = select(Favorite.fav_ast_id).where(
+        Favorite.fav_usr_id == user.user_id
+    )
+
+    favorite_order = case(
+        (Asset.ast_id.in_(favorite_asset_ids), 0),
+        else_=1,
+    )
 
     result = await db.execute(
-        select(Asset).order_by(Asset.ast_type, Asset.ast_name)
+        select(Asset)
+        .order_by(
+            favorite_order,
+            Asset.ast_type,
+            Asset.ast_name,
+            Asset.ast_id,
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     )
-    database_assets = result.scalars().all()
 
-    items = []
+    database_assets = list(result.scalars().all())
 
-    for asset in database_assets:
-        item = await create_asset_item(db, asset)
-        items.append(item)
+    items = [
+        await create_asset_item(db, asset)
+        for asset in database_assets
+    ]
 
-    return AssetListResponse(count=len(items), items=items)
+    return AssetListResponse(
+        count=total,
+        page=page,
+        page_size=page_size,
+        items=items,
+    )
 
 
 @router.get("/market", response_model=MarketListResponse)
-async def list_market(db: DbSession) -> MarketListResponse:
-    """Retourne les prix des actifs avec yfinance."""
+async def list_market(
+    db: DbSession,
+    user: CurrentUser,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> MarketListResponse:
+    """Retourne les prix des 20 actifs de la page demandée."""
 
     try:
+        total = await db.scalar(
+            select(func.count())
+            .select_from(Asset)
+            .where(Asset.ast_is_tracked.is_(True))
+        ) or 0
+
+        favorite_asset_ids = select(Favorite.fav_ast_id).where(
+            Favorite.fav_usr_id == user.user_id
+        )
+
+        favorite_order = case(
+            (Asset.ast_id.in_(favorite_asset_ids), 0),
+            else_=1,
+        )
+
         result = await db.execute(
             select(Asset)
             .where(Asset.ast_is_tracked.is_(True))
-            .order_by(Asset.ast_type, Asset.ast_name)
+            .order_by(
+                favorite_order,
+                Asset.ast_type,
+                Asset.ast_name,
+                Asset.ast_id,
+            )
+            .offset((page - 1) * page_size)
+            .limit(page_size)
         )
+
         database_assets = list(result.scalars().all())
-        # Yahoo est appelé dans un thread pour laisser l'API disponible.
+
         items = await asyncio.to_thread(
             get_market_assets,
             database_assets,
         )
-        return MarketListResponse(count=len(items), items=items)
+
+        return MarketListResponse(
+            count=total,
+            page=page,
+            page_size=page_size,
+            items=items,
+        )
+
     except Exception as error:
         raise create_http_error(error) from error
 

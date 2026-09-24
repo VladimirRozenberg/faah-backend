@@ -1,10 +1,12 @@
+
+
 """Création du portefeuille, achats et ventes simulés, calculs et historique."""
 
 import asyncio
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, func, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from assets.market_data import get_market_asset
@@ -17,6 +19,7 @@ from portfolio.schemas import (
     SellAssetRequest,
     TransactionListResponse,
     TransactionResponse,
+    AssetTransactionSummary,
 )
 
 
@@ -37,7 +40,7 @@ async def find_asset(db: AsyncSession, symbol: str) -> Asset:
     )
 
     if asset is None:
-        raise LookupError(f"L'actif {symbol} n'existe pas.")
+        raise LookupError(f"Asset {symbol} does not exist.")
 
     return asset
 
@@ -47,8 +50,8 @@ async def get_user_portfolio(db: AsyncSession, user_id: int) -> Portfolio:
 
     user = await db.get(User, user_id)
 
-    if user is None or not user.usr_is_active:
-        raise LookupError("Cet utilisateur n'existe pas.")
+    if user is None:
+        raise LookupError("This user does not exist.")
 
     portfolio = await db.scalar(
         select(Portfolio).where(Portfolio.prt_usr_id == user_id)
@@ -58,19 +61,22 @@ async def get_user_portfolio(db: AsyncSession, user_id: int) -> Portfolio:
         # Le premier accès crée le portefeuille ; les suivants le réutilisent.
         portfolio = Portfolio(
             prt_usr_id=user_id,
-            prt_name="Mon portefeuille",
+            prt_name="My portfolio",
             prt_base_currency="USD",
             prt_is_active=True,
         )
         db.add(portfolio)
-        await db.commit()
-        await db.refresh(portfolio)
+        await db.flush()
 
     return portfolio
 
 
 async def get_current_price(asset: Asset) -> float | None:
     """Cherche le prix dans Redis, puis dans yfinance."""
+
+    if asset.ast_currency != "USD":
+        # No FX conversion is available: never label a foreign amount as USD.
+        return None
 
     try:
         quote = await get_latest_quote(asset.ast_symbol)
@@ -141,6 +147,7 @@ async def buy_asset(
 ) -> PortfolioResponse:
     """Achète un actif et met la position à jour."""
 
+    account = await get_active_account(db, user_id)
     portfolio = await get_user_portfolio(db, user_id)
     asset = await find_asset(db, data.symbol)
 
@@ -152,7 +159,11 @@ async def buy_asset(
     # Decimal conserve des calculs décimaux pour les montants enregistrés.
     # La conversion par str évite de reprendre les approximations d'un float.
     quantity = Decimal(str(data.quantity))
-    price = Decimal(str(data.purchase_price))
+    price = await execution_price(asset)
+    amount = quantity * price
+    if amount > account.usr_balance:
+        raise ValueError("Insufficient available balance.")
+    account.usr_balance -= amount
 
     position = await db.get(
         PortfolioAsset,
@@ -200,6 +211,7 @@ async def sell_asset(
 ) -> PortfolioResponse:
     """Vend une partie ou la totalité d'une position."""
 
+    account = await get_active_account(db, user_id)
     portfolio = await get_user_portfolio(db, user_id)
     asset = await find_asset(db, data.symbol)
 
@@ -210,15 +222,16 @@ async def sell_asset(
 
     if position is None or not position.pas_is_active:
         raise LookupError(
-            f"Le portefeuille ne possède pas {asset.ast_symbol}."
+            f"The portfolio does not hold {asset.ast_symbol}."
         )
 
     quantity = Decimal(str(data.quantity))
-    price = Decimal(str(data.sale_price))
+    price = await execution_price(asset)
 
     if quantity > position.pas_quantity:
-        raise ValueError("La quantité vendue dépasse la quantité possédée.")
+        raise ValueError("The sale quantity exceeds the quantity held.")
 
+    account.usr_balance += quantity * price
     position.pas_quantity -= quantity
     position.pas_updated_at = datetime.now()
 
@@ -307,7 +320,9 @@ async def build_portfolio_response(
     else:
         total_profit = total_current_value - total_invested
 
+    account = await db.get(User, portfolio.prt_usr_id)
     return PortfolioResponse(
+        balance=float(account.usr_balance),
         id=portfolio.prt_id,
         user_id=portfolio.prt_usr_id,
         name=portfolio.prt_name,
@@ -330,7 +345,9 @@ async def read_user_portfolio(
     """Retourne le portefeuille d'un utilisateur."""
 
     portfolio = await get_user_portfolio(db, user_id)
-    return await build_portfolio_response(db, portfolio)
+    response = await build_portfolio_response(db, portfolio)
+    await db.commit()
+    return response
 
 
 async def read_transactions(
@@ -369,7 +386,49 @@ async def read_transactions(
             )
         )
 
+    grouped = await db.execute(
+        select(Asset.ast_id, Asset.ast_symbol, Asset.ast_name,
+               func.count(Transaction.id_trans).label("transaction_count"),
+               func.sum(case((Transaction.type_trans == "buy", 1), else_=0)).label("buy_count"),
+               func.sum(case((Transaction.type_trans == "sell", 1), else_=0)).label("sell_count"))
+        .join(Transaction, Transaction.ast_id_trans == Asset.ast_id)
+        .where(Transaction.prt_id_trans == portfolio.prt_id)
+        .group_by(Asset.ast_id, Asset.ast_symbol, Asset.ast_name)
+        .order_by(Asset.ast_symbol)
+    )
+    by_asset = [AssetTransactionSummary(asset_id=row.ast_id, symbol=row.ast_symbol,
+        name=row.ast_name, transaction_count=row.transaction_count,
+        buy_count=row.buy_count, sell_count=row.sell_count) for row in grouped]
+    transactions.sort(key=lambda item: item.created_at.timestamp(), reverse=True)
+    await db.commit()
     return TransactionListResponse(
         count=len(transactions),
         transactions=transactions,
+        by_asset=by_asset,
     )
+
+
+async def get_active_account(db: AsyncSession, user_id: int) -> User:
+    account = await db.get(User, user_id)
+    if account is None or not account.usr_is_active:
+        raise LookupError("User not found or disabled.")
+    return account
+
+
+async def execution_price(asset: Asset) -> Decimal:
+    price = await get_current_price(asset)
+    if price is None:
+        raise ValueError("A USD quote is unavailable for this asset.")
+    value = Decimal(str(price))
+    if not value.is_finite() or value <= 0 or value >= Decimal("10000000000"):
+        raise ValueError("Invalid quote for this asset.")
+    return value.quantize(Decimal("0.00000001"))
+
+
+async def deposit_cash(db, user_id, amount):
+    """Add simulated funds directly to the user's balance."""
+    account = await get_active_account(db, user_id)
+    account.usr_balance += amount
+    await db.commit()
+    return {"balance": float(account.usr_balance), "currency": "USD", "simulation": True}
+

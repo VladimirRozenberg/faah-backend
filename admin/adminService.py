@@ -15,7 +15,7 @@ class SelfLockoutError(Exception):
 class AdminService:
 
     def _to_user_response(self, user: models.User) -> UserResponse:
-        return UserResponse(user_id=user.usr_id, username=user.usr_username, role=user.usr_role)
+        return UserResponse(user_id=user.usr_id, username=user.usr_username, role=user.usr_role, email=user.usr_email, is_active=user.usr_is_active, balance=float(user.usr_balance))
 
     async def list_users(self, db) -> list[UserResponse]:
         """Retourne tous les utilisateurs, avec leur rôle."""
@@ -29,7 +29,7 @@ class AdminService:
         """Active ou désactive un compte (suppression logique)."""
 
         if user_id == admin_id and not is_active:
-            raise SelfLockoutError("Tu ne peux pas désactiver ton propre compte.")
+            raise SelfLockoutError("You cannot disable your own account.")
 
         user = await self._get_user_or_raise(user_id, db)
         user.usr_is_active = is_active
@@ -41,7 +41,7 @@ class AdminService:
         """Change le rôle (employe/admin) d'un utilisateur."""
 
         if user_id == admin_id and role != "admin":
-            raise SelfLockoutError("Tu ne peux pas te retirer ton propre rôle d'administrateur.")
+            raise SelfLockoutError("You cannot remove your own administrator role.")
 
         user = await self._get_user_or_raise(user_id, db)
         user.usr_role = role
@@ -71,7 +71,7 @@ class AdminService:
             await db.rollback()
             raise UsernameTakenError() from error
 
-        return TokenResponse(token=token, message=f"Compte {clean_username} créé avec le rôle {role}.")
+        return TokenResponse(token=token, message=f"Account {clean_username} created successfully.")
 
     async def _get_user_or_raise(self, user_id: int, db) -> models.User:
         query = select(models.User).where(models.User.usr_id == user_id)
@@ -83,3 +83,4 @@ class AdminService:
 
 
 admin_service = AdminService()
+
