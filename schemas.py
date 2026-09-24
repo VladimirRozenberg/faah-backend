@@ -7,7 +7,6 @@ from pydantic import (
     EmailStr,
     Field,
     StringConstraints,
-    field_validator,
 )
 
 
@@ -41,32 +40,7 @@ class LoginRequest(BaseModel):
 class RegisterRequest(BaseModel):
     username: Username
     email: EmailStr
-    password: str = Field(min_length=8, max_length=128)
-
-    @field_validator("password")
-    @classmethod
-    def validate_password(cls, value: str) -> str:
-        if not any(char.islower() for char in value):
-            raise ValueError(
-                "Le mot de passe doit contenir au moins une minuscule."
-            )
-
-        if not any(char.isupper() for char in value):
-            raise ValueError(
-                "Le mot de passe doit contenir au moins une majuscule."
-            )
-
-        if not any(char.isdigit() for char in value):
-            raise ValueError(
-                "Le mot de passe doit contenir au moins un chiffre."
-            )
-
-        if not any(not char.isalnum() for char in value):
-            raise ValueError(
-                "Le mot de passe doit contenir au moins un caractère spécial."
-            )
-
-        return value
+    password: str
 
 
 class TokenResponse(BaseModel):
