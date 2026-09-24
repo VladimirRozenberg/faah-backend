@@ -1,8 +1,9 @@
 """Routes HTTP liées aux actifs et à leur historique."""
 
 import asyncio
+from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -51,6 +52,8 @@ async def create_asset_item(
     """Transforme un Asset PostgreSQL en réponse complète."""
 
     item = AssetItem(
+        logo_url=(f"/api/assets/{quote(asset.ast_symbol, safe='')}/logo"
+                  if asset.ast_logo_mime_type else None),
         id=asset.ast_id,
         symbol=asset.ast_symbol,
         name=asset.ast_name,
@@ -203,3 +206,19 @@ def history_options() -> dict[str, list[str]]:
         period: sorted(intervals)
         for period, intervals in ALLOWED_PERIOD_INTERVALS.items()
     }
+
+
+@router.get("/assets/{symbol}/logo", response_class=Response)
+async def get_asset_logo(symbol: str, db: DbSession) -> Response:
+    """Retourne l'image stockée en base ; 404 permet de garder les initiales."""
+    result = await db.execute(
+        select(Asset.ast_logo, Asset.ast_logo_mime_type)
+        .where(Asset.ast_symbol == symbol.upper())
+    )
+    row = result.first()
+    if row is None or not row[0] or not row[1]:
+        raise HTTPException(status_code=404, detail="Logo indisponible.")
+    return Response(
+        content=row[0], media_type=row[1],
+        headers={"X-Content-Type-Options": "nosniff"},
+    )

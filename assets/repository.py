@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from assets.schemas import DetectedAsset
+from assets.logos import fill_missing_logo
 from models import (
     Asset,
     ClassificationAsset,
@@ -235,6 +236,9 @@ async def save_detected_assets(
 
         link.cla_relevance_confidence = detected.confidence
         link.cla_reason = detected.reason
+
+        # Nouveau ou déjà connu : demander le logo seulement s’il manque.
+        await fill_missing_logo(db, asset)
 
         saved_assets.append(asset)
 

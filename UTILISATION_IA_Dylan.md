@@ -31,3 +31,11 @@ Ces repères identifient les passages techniques accompagnés d’une aide de l�
 **Emplacement :** `routers/live_market.py`, fonction `market_websocket`.
 
 **Prompt reconstitué :** « Montre comment envoyer régulièrement le cours présent dans Redis par WebSocket et convertir sa date au format JSON. »
+
+## IA-06 — Limiter les appels de logos entre plusieurs workers
+
+**Emplacement :** `assets/logos.py`, fonction `fill_missing_logo`.
+
+**Demande résumée :** « Récupérer un logo seulement pour les actifs rencontrés sans image, sans multiplier les appels à Twelve Data. »
+
+Le verrou PostgreSQL empêche deux traitements de réserver simultanément les mêmes crédits. Les dates des tentatives permettent de limiter les appels et d’attendre 24 heures avant de réessayer un actif.

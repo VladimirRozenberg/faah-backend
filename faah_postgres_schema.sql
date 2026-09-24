@@ -102,6 +102,9 @@ CREATE TABLE assets (
     ast_exchange VARCHAR,
     ast_currency VARCHAR,
     ast_country VARCHAR,
+    ast_logo BYTEA,
+    ast_logo_mime_type VARCHAR,
+    ast_logo_last_attempt_at TIMESTAMPTZ,
 
     -- Indique si le marché en direct doit suivre cet actif.
     ast_is_tracked BOOLEAN NOT NULL DEFAULT FALSE,

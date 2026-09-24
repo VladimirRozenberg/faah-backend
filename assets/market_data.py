@@ -1,6 +1,7 @@
 """Récupère les prix et les bougies avec yfinance."""
 
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import pandas as pd
 import yfinance as yf
@@ -107,6 +108,8 @@ def get_market_assets(database_assets: list[Asset]) -> list[AssetSummary]:
 
         results.append(
             AssetSummary(
+                logo_url=(f"/api/assets/{quote(asset.ast_symbol, safe='')}/logo"
+                          if asset.ast_logo_mime_type else None),
                 symbol=asset.ast_symbol,
                 name=asset.ast_name,
                 type=asset.ast_type,

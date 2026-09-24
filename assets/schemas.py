@@ -23,6 +23,7 @@ class AssetSummary(BaseModel):
     symbol: str
     name: str
     type: str
+    logo_url: str | None = None
     exchange: str | None = None
     currency: str
     last_price: float
@@ -49,6 +50,7 @@ class AssetItem(BaseModel):
     name: str
     type: str
     yahoo_type: str | None
+    logo_url: str | None = None
     exchange: str | None = None
     currency: str | None = None
     country: str | None = None

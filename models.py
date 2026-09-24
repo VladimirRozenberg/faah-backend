@@ -8,6 +8,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -110,6 +111,10 @@ class Asset(Base):
     ast_exchange: Mapped[str | None] = mapped_column(String)
     ast_currency: Mapped[str | None] = mapped_column(String)
     ast_country: Mapped[str | None] = mapped_column(String)
+
+    ast_logo: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
+    ast_logo_mime_type: Mapped[str | None] = mapped_column(String)
+    ast_logo_last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     ast_is_tracked: Mapped[bool] = mapped_column(
         Boolean,
