@@ -1,6 +1,8 @@
 """Read-only routes for ingested data sources."""
 
 from collections import defaultdict
+from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import func, or_, select
@@ -25,24 +27,163 @@ from models import (
 router = APIRouter(prefix="/api", tags=["Data sources"])
 
 
+def _naive_utc(value: datetime | None) -> datetime | None:
+    """Normalize API timestamps for the source tables' timezone-naive columns."""
+
+    if value is None or value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _contains_pattern(value: str) -> str:
+    escaped = value.strip().replace("\\", "\\\\")
+    escaped = escaped.replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 @router.get("/data-sources")
 async def list_data_sources(
     db: DbSession,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    q: str | None = Query(default=None, min_length=1, max_length=200),
+    source_type: str | None = Query(default=None, min_length=1, max_length=100),
+    is_processed: bool | None = Query(default=None),
+    published_from: datetime | None = Query(default=None),
+    published_to: datetime | None = Query(default=None),
+    created_from: datetime | None = Query(default=None),
+    created_to: datetime | None = Query(default=None),
+    asset_symbol: str | None = Query(default=None, min_length=1, max_length=50),
+    niche: str | None = Query(default=None, min_length=1, max_length=200),
+    category: str | None = Query(default=None, min_length=1, max_length=100),
+    importance: Literal["low", "medium", "high"] | None = Query(default=None),
+    sentiment: Literal["negative", "neutral", "positive"] | None = Query(
+        default=None
+    ),
+    should_trigger: bool | None = Query(default=None),
+    sort_by: Literal["created_at", "published_at"] = Query(default="created_at"),
+    sort_order: Literal["asc", "desc"] = Query(default="desc"),
 ) -> dict:
-    """Retourne uniquement la page d'actualités demandée."""
+    """Return a filtered, paginated page of ingested sources."""
+
+    published_from = _naive_utc(published_from)
+    published_to = _naive_utc(published_to)
+    created_from = _naive_utc(created_from)
+    created_to = _naive_utc(created_to)
+    if published_from and published_to and published_from > published_to:
+        raise HTTPException(
+            status_code=422,
+            detail="published_from must be before or equal to published_to",
+        )
+    if created_from and created_to and created_from > created_to:
+        raise HTTPException(
+            status_code=422,
+            detail="created_from must be before or equal to created_to",
+        )
+
+    conditions = []
+    if q is not None and q.strip():
+        pattern = _contains_pattern(q)
+        conditions.append(
+            or_(
+                DataSource.src_title.ilike(pattern, escape="\\"),
+                DataSource.src_content.ilike(pattern, escape="\\"),
+                DataSource.src_original_url.ilike(pattern, escape="\\"),
+            )
+        )
+    if source_type is not None and source_type.strip():
+        conditions.append(
+            func.lower(DataSource.src_type) == source_type.strip().lower()
+        )
+    if is_processed is not None:
+        conditions.append(DataSource.src_is_processed.is_(is_processed))
+    if published_from is not None:
+        conditions.append(DataSource.src_published_at >= published_from)
+    if published_to is not None:
+        conditions.append(DataSource.src_published_at <= published_to)
+    if created_from is not None:
+        conditions.append(DataSource.src_created_at >= created_from)
+    if created_to is not None:
+        conditions.append(DataSource.src_created_at <= created_to)
+
+    needs_classification = any(
+        value is not None
+        for value in (
+            asset_symbol,
+            niche,
+            category,
+            importance,
+            sentiment,
+            should_trigger,
+        )
+    )
+    if needs_classification:
+        related = select(1).select_from(SourceClassification)
+        if asset_symbol is not None:
+            related = related.join(
+                ClassificationAsset,
+                ClassificationAsset.cla_cls_id == SourceClassification.cls_id,
+            ).join(Asset, Asset.ast_id == ClassificationAsset.cla_ast_id)
+        if niche is not None:
+            related = related.join(
+                ClassificationNiche,
+                ClassificationNiche.cln_cls_id == SourceClassification.cls_id,
+            ).join(Niche, Niche.nic_id == ClassificationNiche.cln_nic_id)
+
+        classification_conditions = [
+            SourceClassification.cls_src_id == DataSource.src_id
+        ]
+        if asset_symbol is not None:
+            classification_conditions.append(
+                func.upper(Asset.ast_symbol) == asset_symbol.strip().upper()
+            )
+        if niche is not None:
+            classification_conditions.append(
+                func.lower(Niche.nic_name) == niche.strip().lower()
+            )
+        if category is not None:
+            classification_conditions.append(
+                func.lower(SourceClassification.cls_category)
+                == category.strip().lower()
+            )
+        if importance is not None:
+            classification_conditions.append(
+                SourceClassification.cls_importance == importance
+            )
+        if sentiment is not None:
+            classification_conditions.append(
+                SourceClassification.cls_sentiment == sentiment
+            )
+        if should_trigger is not None:
+            classification_conditions.append(
+                SourceClassification.cls_should_trigger.is_(should_trigger)
+            )
+        conditions.append(related.where(*classification_conditions).exists())
 
     total = await db.scalar(
-        select(func.count()).select_from(DataSource)
+        select(func.count()).select_from(DataSource).where(*conditions)
     ) or 0
+
+    sort_column = (
+        DataSource.src_published_at
+        if sort_by == "published_at"
+        else DataSource.src_created_at
+    )
+    primary_order = (
+        sort_column.asc().nulls_last()
+        if sort_order == "asc"
+        else sort_column.desc().nulls_last()
+    )
+    id_order = (
+        DataSource.src_id.asc()
+        if sort_order == "asc"
+        else DataSource.src_id.desc()
+    )
 
     result = await db.execute(
         select(*DataSource.__table__.c)
-        .order_by(
-            DataSource.src_created_at.desc(),
-            DataSource.src_id.desc(),
-        )
+        .where(*conditions)
+        .order_by(primary_order, id_order)
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
