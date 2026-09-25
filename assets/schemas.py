@@ -77,13 +77,19 @@ class AssetItem(BaseModel):
     contract_size: float | None = None
 
 
+class AssetListItem(AssetItem):
+    """Asset metadata enriched with optional current market information."""
+
+    market: AssetSummary | None = None
+
+
 class AssetListResponse(BaseModel):
     """Liste des actifs enregistrés dans PostgreSQL."""
 
     count: int
     page: int
     page_size :int
-    items: list[AssetItem]
+    items: list[AssetListItem]
 
 
 class Candle(BaseModel):

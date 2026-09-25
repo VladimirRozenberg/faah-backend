@@ -1,6 +1,7 @@
 """Routes HTTP liées aux actifs et à leur historique."""
 
 import asyncio
+import logging
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Response
@@ -18,6 +19,7 @@ from assets.market_data import (
 
 from assets.schemas import (
     AssetItem,
+    AssetListItem,
     AssetListResponse,
     AssetSummary,
     CandleResponse,
@@ -43,6 +45,7 @@ from models import (
 # Toutes les routes de ce fichier commencent par /api et sont regroupées
 # sous le titre « Marché » dans la documentation Swagger.
 router = APIRouter(prefix="/api", tags=["Marché"])
+logger = logging.getLogger(__name__)
 
 
 async def find_asset_or_404(db: DbSession, symbol: str) -> Asset:
@@ -117,6 +120,28 @@ async def create_asset_item(
     return item
 
 
+async def add_market_information(
+    assets: list[Asset],
+    items: list[AssetListItem],
+) -> None:
+    """Attach one batched market lookup without hiding database assets on failure."""
+
+    if not assets:
+        return
+    try:
+        summaries = await asyncio.to_thread(get_market_assets, assets)
+    except Exception:
+        logger.exception(
+            "Market information unavailable for %d asset(s)",
+            len(assets),
+        )
+        return
+
+    summaries_by_symbol = {summary.symbol: summary for summary in summaries}
+    for item in items:
+        item.market = summaries_by_symbol.get(item.symbol)
+
+
 def create_http_error(error: Exception) -> HTTPException:
     """Convertit les erreurs du service en réponses HTTP compréhensibles."""
 
@@ -164,10 +189,11 @@ async def list_assets(
 
     database_assets = list(result.scalars().all())
 
-    items = [
-        await create_asset_item(db, asset)
-        for asset in database_assets
-    ]
+    items = []
+    for asset in database_assets:
+        item = await create_asset_item(db, asset)
+        items.append(AssetListItem.model_validate(item.model_dump()))
+    await add_market_information(database_assets, items)
 
     return AssetListResponse(
         count=total,
