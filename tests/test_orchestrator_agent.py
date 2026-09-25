@@ -1,7 +1,9 @@
+import asyncio
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from orchestrator_agent import (
     ActionType,
@@ -14,6 +16,7 @@ from orchestrator_agent.context import StaticContextProvider
 from orchestrator_agent.follow_up import resolve_asset_symbol
 from orchestrator_agent.memory import JsonMemoryStore
 from orchestrator_agent.policy import OrchestratorPolicy
+from orchestrator_agent.service import run_orchestrator_service
 from orchestrator_agent.schemas import (
     AnalysisFollowUp,
     AnalysisFollowUpJobState,
@@ -247,6 +250,42 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             brain.contexts[-1].previous_instructions,
             "Check the regulatory follow-up before trusting ACME.",
         )
+
+    async def test_service_retries_after_unexpected_error(self):
+        now = datetime(2026, 9, 25, 12, tzinfo=timezone.utc)
+        service_pass = AsyncMock(
+            side_effect=[
+                RuntimeError("temporary database failure"),
+                asyncio.CancelledError,
+            ]
+        )
+
+        with (
+            patch(
+                "orchestrator_agent.service._next_orchestration_at",
+                return_value=now,
+            ),
+            patch(
+                "orchestrator_agent.service._run_service_pass",
+                service_pass,
+            ),
+            patch(
+                "orchestrator_agent.service.asyncio.sleep",
+                AsyncMock(),
+            ) as sleep,
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await run_orchestrator_service()
+
+        self.assertEqual(service_pass.await_count, 2)
+        sleep.assert_awaited_once_with(5)
+
+    def test_retry_delay_is_bounded(self):
+        from orchestrator_agent.service import _retry_delay
+
+        self.assertEqual(_retry_delay(1), 5)
+        self.assertEqual(_retry_delay(2), 10)
+        self.assertEqual(_retry_delay(10), 60)
 
 
 if __name__ == "__main__":

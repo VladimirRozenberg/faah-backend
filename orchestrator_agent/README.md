@@ -68,9 +68,11 @@ RUN_ORCHESTRATOR=true
 ```
 
 FastAPI lifespan then starts one `faah-orchestrator` task. It replaces the old
-per-feed RSS task fan-out. Keep this disabled until the fault-handling policy is
-agreed: failures are currently recorded, but retry/backoff, stale-claim recovery,
-and multi-process leader election are intentionally not finalized.
+per-feed RSS task fan-out. Unexpected database, model, validation, and memory
+errors are logged with their traceback and retried with exponential backoff from
+5 to 60 seconds. Deployment cancellation is propagated immediately. Stale-claim
+recovery and multi-process leader election are separate concerns and are not yet
+finalized.
 
 Compact Qwen handoff memory is still stored in
 `data/orchestrator_memory.json` (override with `ORCHESTRATOR_MEMORY_PATH`). Feed
