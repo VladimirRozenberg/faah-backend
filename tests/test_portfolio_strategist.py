@@ -8,6 +8,7 @@ from models import Analysis, PortfolioRecommendation, PortfolioStrategistAttempt
 from portfolio_strategist.brain import build_strategist_model_input
 from portfolio_strategist.brain import validate_strategist_coverage
 from portfolio_strategist.brain import parse_strategist_decision
+from portfolio_strategist.brain import StrategistResponseValidationError
 from portfolio_strategist.detector import detect_price_movement, risk_is_compatible
 from portfolio_strategist.executors import StrategistReviewExecutor
 from portfolio_strategist.schemas import (
@@ -168,6 +169,50 @@ class StrategistCoverageTests(unittest.TestCase):
                 ),
             )
 
+    def test_historical_recommendation_nested_signal_id_is_valid_context(self):
+        from portfolio_strategist.schemas import StrategistOpportunity
+
+        context = self.context()
+        context.recent_strategist_ideas = [
+            {
+                "run_id": 17,
+                "signal_id": None,
+                "decision": {
+                    "opportunities": [
+                        {
+                            "asset_symbol": "GC=F",
+                            "signal_id": 42,
+                            "reason": "Historical recommendation.",
+                            "confidence": 71,
+                        }
+                    ]
+                },
+            }
+        ]
+        decision = self.decision(
+            assessments=[
+                HoldingAssessment(
+                    asset_symbol="GC=F",
+                    verdict="watch",
+                    reason="The historical idea remains relevant.",
+                )
+            ],
+            opportunities=[
+                StrategistOpportunity(
+                    asset_symbol="GC=F",
+                    signal_id=42,
+                    reason="Reconsider the supplied historical recommendation.",
+                    confidence=70,
+                )
+            ],
+        )
+
+        validate_strategist_coverage(context, decision)
+
+        decision.opportunities[0].signal_id = 43
+        with self.assertRaisesRegex(ValueError, "signals it was not supplied"):
+            validate_strategist_coverage(context, decision)
+
     def test_model_response_may_omit_optional_next_review_note(self):
         decision = parse_strategist_decision(
             '{"summary":"Stable.","portfolio_health":"stable"}'
@@ -217,11 +262,15 @@ class FlakyStrategistBrain:
 
     def __init__(self):
         self.calls = 0
+        self.validation_feedback = []
 
-    async def review(self, context):
+    async def review(self, context, validation_feedback=None):
         self.calls += 1
+        self.validation_feedback.append(validation_feedback)
         if self.calls < 3:
-            raise RuntimeError(f"temporary failure {self.calls}")
+            raise StrategistResponseValidationError(
+                f"response validation failure {self.calls}"
+            )
         return "accepted"
 
 
@@ -262,11 +311,26 @@ class StrategistRetryTests(unittest.IsolatedAsyncioTestCase):
             [item.psa_status for item in attempts],
             ["failed", "failed", "succeeded"],
         )
-        self.assertIn("temporary failure 1", attempts[0].psa_error)
-        self.assertIn("temporary failure 2", attempts[1].psa_error)
+        self.assertIn("response validation failure 1", attempts[0].psa_error)
+        self.assertIn("response validation failure 2", attempts[1].psa_error)
+        self.assertEqual(
+            brain.validation_feedback,
+            [
+                None,
+                "response validation failure 1",
+                "response validation failure 2",
+            ],
+        )
         self.assertEqual(len(prompts), 3)
         self.assertTrue(
             all("FINAL NON-NEGOTIABLE RULES" in item.prm_prompt_text for item in prompts)
+        )
+        self.assertNotIn("PREVIOUS ATTEMPT", prompts[0].prm_prompt_text)
+        self.assertIn("response validation failure 1", prompts[1].prm_prompt_text)
+        self.assertIn("response validation failure 2", prompts[2].prm_prompt_text)
+        self.assertGreater(
+            prompts[2].prm_prompt_text.index("FINAL NON-NEGOTIABLE RULES"),
+            prompts[2].prm_prompt_text.index("response validation failure 2"),
         )
         self.assertEqual(run.psr_prm_id, prompts[-1].prm_id)
 

@@ -37,6 +37,7 @@ from portfolio_strategist.brain import (
     LLMStrategistBrain,
     SYSTEM_INSTRUCTIONS as STRATEGIST_SYSTEM_INSTRUCTIONS,
     StrategistBrain,
+    StrategistResponseValidationError,
     build_strategist_model_input,
 )
 from portfolio_strategist.repository import StrategistRepository, utc_now
@@ -250,13 +251,15 @@ class StrategistReviewExecutor:
 
         errors = []
         last_error = None
+        validation_feedback = None
         for attempt_number in range(1, MAX_STRATEGIST_ATTEMPTS + 1):
+            model_input = build_strategist_model_input(context, validation_feedback)
             prompt = await record_prompt(
                 self.repository.session,
                 name=f"Portfolio strategist attempt {attempt_number}",
                 prompt_type=f"strategist_{run.psr_review_type}",
                 system_instructions=STRATEGIST_SYSTEM_INSTRUCTIONS,
-                user_prompt=build_strategist_model_input(context),
+                user_prompt=model_input,
             )
             attempt = PortfolioStrategistAttempt(
                 psa_psr_id=run.psr_id,
@@ -272,7 +275,7 @@ class StrategistReviewExecutor:
             await self.repository.session.commit()
 
             try:
-                result = await self.brain.review(context)
+                result = await self.brain.review(context, validation_feedback)
             except asyncio.CancelledError:
                 await self.repository.session.rollback()
                 attempt = await self.repository.session.get(
@@ -289,6 +292,11 @@ class StrategistReviewExecutor:
                 last_error = exc
                 message = f"Attempt {attempt_number}: {type(exc).__name__}: {exc}"
                 errors.append(message)
+                validation_feedback = (
+                    str(exc)
+                    if isinstance(exc, StrategistResponseValidationError)
+                    else None
+                )
                 await self.repository.session.rollback()
                 attempt = await self.repository.session.get(
                     PortfolioStrategistAttempt,
