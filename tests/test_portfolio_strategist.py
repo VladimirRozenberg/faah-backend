@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from live_market.market_schemas import LiveQuote
-from models import PortfolioStrategistAttempt, Prompt
+from models import Analysis, PortfolioRecommendation, PortfolioStrategistAttempt, Prompt
 from portfolio_strategist.brain import build_strategist_model_input
 from portfolio_strategist.brain import validate_strategist_coverage
 from portfolio_strategist.brain import parse_strategist_decision
@@ -269,6 +269,85 @@ class StrategistRetryTests(unittest.IsolatedAsyncioTestCase):
             all("FINAL NON-NEGOTIABLE RULES" in item.prm_prompt_text for item in prompts)
         )
         self.assertEqual(run.psr_prm_id, prompts[-1].prm_id)
+
+
+class FakeSaveResultSession:
+    def __init__(self):
+        self.added = []
+        self.commit = AsyncMock()
+
+    def add(self, item):
+        self.added.append(item)
+
+    async def flush(self):
+        for item in self.added:
+            if isinstance(item, Analysis) and item.anl_id is None:
+                item.anl_id = 91
+
+    async def scalars(self, _statement):
+        asset = SimpleNamespace(ast_id=3, ast_symbol="GC=F")
+        return SimpleNamespace(all=lambda: [asset])
+
+
+class StrategistRecommendationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_saved_decision_creates_frontend_recommendation_rows(self):
+        session = FakeSaveResultSession()
+        executor = StrategistReviewExecutor(SimpleNamespace(session=session))
+        run = SimpleNamespace(
+            psr_id=7,
+            psr_prm_id=4,
+            psr_ast_id=3,
+            psr_sig_id=8,
+            psr_review_type="targeted_signal",
+            psr_reason="New signal",
+        )
+        context = StrategistContext(
+            review_type="targeted_signal",
+            reason="New signal",
+            portfolio={"portfolio_id": 2, "risk_tolerance": "medium"},
+            triggering_signal=StrategistSignal(
+                signal_id=8,
+                analysis_id=6,
+                asset_id=3,
+                asset_symbol="GC=F",
+                action="buy",
+                created_at=datetime.now(timezone.utc),
+            ),
+        )
+        decision = {
+            "summary": "Gold remains worth watching.",
+            "portfolio_health": "watch",
+            "holding_assessments": [
+                {
+                    "asset_symbol": "GC=F",
+                    "verdict": "watch",
+                    "reason": "Volatility is elevated.",
+                }
+            ],
+            "opportunities": [
+                {
+                    "asset_symbol": "GC=F",
+                    "signal_id": 8,
+                    "reason": "The signal fits the portfolio.",
+                    "confidence": 73,
+                }
+            ],
+            "targeted_conclusion": "opportunity",
+            "targeted_reason": "The new signal is relevant.",
+        }
+
+        analysis_id = await executor._save_result(run, context, decision, "raw")
+
+        recommendations = [
+            item for item in session.added if isinstance(item, PortfolioRecommendation)
+        ]
+        self.assertEqual(analysis_id, 91)
+        self.assertEqual(
+            [item.prc_kind for item in recommendations],
+            ["holding_assessment", "opportunity", "targeted_conclusion"],
+        )
+        self.assertEqual(recommendations[1].prc_confidence, 73)
+        self.assertTrue(all(item.prc_prt_id == 2 for item in recommendations))
 
 
 if __name__ == "__main__":

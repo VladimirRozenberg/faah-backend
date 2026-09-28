@@ -22,6 +22,7 @@ from models import (
     PortfolioAsset,
     PortfolioAssetTypePreference,
     PortfolioNichePreference,
+    PortfolioRecommendation,
     PortfolioStrategist,
     PortfolioStrategistAttempt,
     PortfolioStrategistRun,
@@ -759,6 +760,7 @@ class StrategistReviewExecutor:
             item["asset_symbol"].strip().upper()
             for item in decision["holding_assessments"] + decision["opportunities"]
         }
+        assets_by_symbol = {}
         if symbols:
             assets = list(
                 (
@@ -767,6 +769,9 @@ class StrategistReviewExecutor:
                     )
                 ).all()
             )
+            assets_by_symbol = {
+                asset.ast_symbol.strip().upper(): asset for asset in assets
+            }
             reasons = {
                 item["asset_symbol"].strip().upper(): item["reason"]
                 for item in decision["holding_assessments"] + decision["opportunities"]
@@ -783,6 +788,67 @@ class StrategistReviewExecutor:
                         aas_price_context=None,
                     )
                 )
+
+        portfolio_id = int(context.portfolio["portfolio_id"])
+        for assessment in decision["holding_assessments"]:
+            symbol = assessment["asset_symbol"].strip().upper()
+            asset = assets_by_symbol.get(symbol)
+            self.repository.session.add(
+                PortfolioRecommendation(
+                    prc_psr_id=run.psr_id,
+                    prc_prt_id=portfolio_id,
+                    prc_ast_id=asset.ast_id if asset is not None else None,
+                    prc_kind="holding_assessment",
+                    prc_asset_symbol=symbol,
+                    prc_action=assessment["verdict"],
+                    prc_reason=assessment["reason"],
+                )
+            )
+        for opportunity in decision["opportunities"]:
+            symbol = opportunity["asset_symbol"].strip().upper()
+            asset = assets_by_symbol.get(symbol)
+            self.repository.session.add(
+                PortfolioRecommendation(
+                    prc_psr_id=run.psr_id,
+                    prc_prt_id=portfolio_id,
+                    prc_ast_id=asset.ast_id if asset is not None else None,
+                    prc_sig_id=opportunity.get("signal_id"),
+                    prc_kind="opportunity",
+                    prc_asset_symbol=symbol,
+                    prc_action="opportunity",
+                    prc_reason=opportunity["reason"],
+                    prc_confidence=opportunity["confidence"],
+                )
+            )
+        if decision.get("targeted_conclusion") and decision.get("targeted_reason"):
+            targeted_symbol = None
+            targeted_asset_id = run.psr_ast_id
+            if context.triggering_signal is not None:
+                targeted_symbol = context.triggering_signal.asset_symbol.strip().upper()
+                targeted_asset_id = context.triggering_signal.asset_id
+            elif targeted_asset_id is not None:
+                targeted_asset = next(
+                    (
+                        position
+                        for position in context.positions
+                        if position.asset_id == targeted_asset_id
+                    ),
+                    None,
+                )
+                if targeted_asset is not None:
+                    targeted_symbol = targeted_asset.symbol.strip().upper()
+            self.repository.session.add(
+                PortfolioRecommendation(
+                    prc_psr_id=run.psr_id,
+                    prc_prt_id=portfolio_id,
+                    prc_ast_id=targeted_asset_id,
+                    prc_sig_id=run.psr_sig_id,
+                    prc_kind="targeted_conclusion",
+                    prc_asset_symbol=targeted_symbol,
+                    prc_action=decision["targeted_conclusion"],
+                    prc_reason=decision["targeted_reason"],
+                )
+            )
         for source in context.analyses:
             self.repository.session.add(
                 AnalysisInput(

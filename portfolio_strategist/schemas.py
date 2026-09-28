@@ -120,3 +120,63 @@ class StrategistBrainResult(BaseModel):
     provider_response: dict[str, Any]
     system_instructions: str
     user_prompt: str
+
+
+class PortfolioRecommendationResponse(BaseModel):
+    recommendation_id: int
+    run_id: int
+    kind: str
+    asset_id: int | None = None
+    asset_symbol: str | None = None
+    signal_id: int | None = None
+    action: str
+    reason: str
+    confidence: int | None = None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class StrategistReviewResponse(BaseModel):
+    run_id: int
+    review_type: str
+    status: str
+    priority: int
+    asset_id: int | None = None
+    signal_id: int | None = None
+    market_event_id: int | None = None
+    result_analysis_id: int | None = None
+    reason: str
+    decision: dict[str, Any] | None = None
+    error: str | None = None
+    recommendations: list[PortfolioRecommendationResponse] = Field(default_factory=list)
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class StrategistReviewListResponse(BaseModel):
+    count: int
+    items: list[StrategistReviewResponse]
+
+
+class PortfolioStrategistResponse(BaseModel):
+    strategist_id: int
+    portfolio_id: int
+    status: str
+    instructions: str | None = None
+    last_signal_id: int
+    last_full_review_at: datetime | None = None
+    next_full_review_at: datetime
+    last_summary: str | None = None
+    active_review: StrategistReviewResponse | None = None
+    latest_review: StrategistReviewResponse | None = None
+    recommendation_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class QueueStrategistReviewResponse(BaseModel):
+    run_id: int
+    portfolio_id: int
+    status: str
+    already_queued: bool
+    message: str

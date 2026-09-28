@@ -1314,3 +1314,60 @@ class PortfolioStrategistAttempt(Base):
     psa_completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+
+
+class PortfolioRecommendation(Base):
+    """A frontend-facing recommendation extracted from a strategist decision."""
+
+    __tablename__ = "portfolio_recommendations"
+    __table_args__ = (
+        CheckConstraint(
+            "prc_kind IN ('holding_assessment', 'opportunity', "
+            "'targeted_conclusion')",
+            name="chk_portfolio_recommendation_kind",
+        ),
+        CheckConstraint(
+            "prc_status IN ('new', 'viewed', 'dismissed', 'acted_on')",
+            name="chk_portfolio_recommendation_status",
+        ),
+        CheckConstraint(
+            "prc_confidence IS NULL OR prc_confidence BETWEEN 0 AND 100",
+            name="chk_portfolio_recommendation_confidence",
+        ),
+        Index(
+            "idx_portfolio_recommendations_portfolio_status",
+            "prc_prt_id",
+            "prc_status",
+            "prc_created_at",
+        ),
+        Index("idx_portfolio_recommendations_run", "prc_psr_id"),
+    )
+
+    prc_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    prc_psr_id: Mapped[int] = mapped_column(
+        ForeignKey("portfolio_strategist_runs.psr_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    prc_prt_id: Mapped[int] = mapped_column(
+        ForeignKey("portfolios.prt_id", ondelete="CASCADE"), nullable=False
+    )
+    prc_ast_id: Mapped[int | None] = mapped_column(
+        ForeignKey("assets.ast_id", ondelete="SET NULL")
+    )
+    prc_sig_id: Mapped[int | None] = mapped_column(
+        ForeignKey("signals.sig_id", ondelete="SET NULL")
+    )
+    prc_kind: Mapped[str] = mapped_column(String, nullable=False)
+    prc_asset_symbol: Mapped[str | None] = mapped_column(String)
+    prc_action: Mapped[str] = mapped_column(String, nullable=False)
+    prc_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    prc_confidence: Mapped[int | None] = mapped_column(Integer)
+    prc_status: Mapped[str] = mapped_column(
+        String, default="new", server_default="new", nullable=False
+    )
+    prc_created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    prc_updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
