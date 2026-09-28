@@ -4,7 +4,12 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select
 
 from db import DbSession
-from models import MarketOpportunityEvent, PortfolioStrategist, PortfolioStrategistRun
+from models import (
+    MarketOpportunityEvent,
+    PortfolioStrategist,
+    PortfolioStrategistAttempt,
+    PortfolioStrategistRun,
+)
 from portfolio_strategist.repository import StrategistRepository
 
 
@@ -93,6 +98,33 @@ async def list_strategist_runs(
     if portfolio_id is not None:
         statement = statement.where(PortfolioStrategist.pst_prt_id == portfolio_id)
     rows = (await db.execute(statement)).all()
+    run_ids = [run.psr_id for run, _ in rows]
+    attempts_by_run: dict[int, list[dict]] = {run_id: [] for run_id in run_ids}
+    if run_ids:
+        attempts = list(
+            (
+                await db.scalars(
+                    select(PortfolioStrategistAttempt)
+                    .where(PortfolioStrategistAttempt.psa_psr_id.in_(run_ids))
+                    .order_by(
+                        PortfolioStrategistAttempt.psa_psr_id,
+                        PortfolioStrategistAttempt.psa_attempt,
+                    )
+                )
+            ).all()
+        )
+        for attempt in attempts:
+            attempts_by_run[attempt.psa_psr_id].append(
+                {
+                    "attempt": attempt.psa_attempt,
+                    "status": attempt.psa_status,
+                    "prompt_id": attempt.psa_prm_id,
+                    "model": attempt.psa_model,
+                    "error": attempt.psa_error,
+                    "started_at": attempt.psa_created_at,
+                    "completed_at": attempt.psa_completed_at,
+                }
+            )
     return {
         "count": len(rows),
         "items": [
@@ -110,6 +142,7 @@ async def list_strategist_runs(
                 "reason": run.psr_reason,
                 "decision": run.psr_decision,
                 "error": run.psr_error,
+                "attempts": attempts_by_run[run.psr_id],
                 "created_at": run.psr_created_at,
                 "completed_at": run.psr_completed_at,
             }

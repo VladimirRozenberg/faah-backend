@@ -23,6 +23,7 @@ from models import (
     PortfolioAssetTypePreference,
     PortfolioNichePreference,
     PortfolioStrategist,
+    PortfolioStrategistAttempt,
     PortfolioStrategistRun,
     Signal,
 )
@@ -31,7 +32,12 @@ from orchestrator_agent.follow_up import (
     FollowUpAnalysisRepository,
     resolve_asset_symbol,
 )
-from portfolio_strategist.brain import StrategistBrain, LLMStrategistBrain
+from portfolio_strategist.brain import (
+    LLMStrategistBrain,
+    SYSTEM_INSTRUCTIONS as STRATEGIST_SYSTEM_INSTRUCTIONS,
+    StrategistBrain,
+    build_strategist_model_input,
+)
 from portfolio_strategist.repository import StrategistRepository, utc_now
 from portfolio_strategist.schemas import (
     StrategistAnalysis,
@@ -49,6 +55,8 @@ from prompt.source_analysis import DEFAULT_ANALYSIS_MODEL, parse_analysis
 logger = logging.getLogger(__name__)
 MAX_EVENT_ANALYSES_PER_PASS = 3
 MAX_STRATEGIST_RUNS_PER_PASS = 5
+MAX_STRATEGIST_ATTEMPTS = 3
+STRATEGIST_RETRY_DELAY_SECONDS = 2
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -232,6 +240,90 @@ class StrategistReviewExecutor:
         self.repository = repository
         self.brain = brain or LLMStrategistBrain()
 
+    async def _review_with_retries(
+        self,
+        run: PortfolioStrategistRun,
+        context: StrategistContext,
+    ):
+        """Persist every exact prompt and provider/validation failure."""
+
+        errors = []
+        last_error = None
+        for attempt_number in range(1, MAX_STRATEGIST_ATTEMPTS + 1):
+            prompt = await record_prompt(
+                self.repository.session,
+                name=f"Portfolio strategist attempt {attempt_number}",
+                prompt_type=f"strategist_{run.psr_review_type}",
+                system_instructions=STRATEGIST_SYSTEM_INSTRUCTIONS,
+                user_prompt=build_strategist_model_input(context),
+            )
+            attempt = PortfolioStrategistAttempt(
+                psa_psr_id=run.psr_id,
+                psa_prm_id=prompt.prm_id,
+                psa_attempt=attempt_number,
+                psa_status="running",
+                psa_model=getattr(self.brain, "model", None),
+            )
+            self.repository.session.add(attempt)
+            await self.repository.session.flush()
+            attempt_id = attempt.psa_id
+            run.psr_prm_id = prompt.prm_id
+            await self.repository.session.commit()
+
+            try:
+                result = await self.brain.review(context)
+            except asyncio.CancelledError:
+                await self.repository.session.rollback()
+                attempt = await self.repository.session.get(
+                    PortfolioStrategistAttempt,
+                    attempt_id,
+                )
+                if attempt is not None:
+                    attempt.psa_status = "failed"
+                    attempt.psa_error = "Strategist attempt cancelled."
+                    attempt.psa_completed_at = utc_now()
+                    await self.repository.session.commit()
+                raise
+            except Exception as exc:
+                last_error = exc
+                message = f"Attempt {attempt_number}: {type(exc).__name__}: {exc}"
+                errors.append(message)
+                await self.repository.session.rollback()
+                attempt = await self.repository.session.get(
+                    PortfolioStrategistAttempt,
+                    attempt_id,
+                )
+                if attempt is not None:
+                    attempt.psa_status = "failed"
+                    attempt.psa_error = message[:2_000]
+                    attempt.psa_completed_at = utc_now()
+                    await self.repository.session.commit()
+                logger.exception(
+                    "Strategist attempt failed: run_id=%s attempt=%d/%d",
+                    run.psr_id,
+                    attempt_number,
+                    MAX_STRATEGIST_ATTEMPTS,
+                )
+                if attempt_number < MAX_STRATEGIST_ATTEMPTS:
+                    await asyncio.sleep(STRATEGIST_RETRY_DELAY_SECONDS)
+                    continue
+                break
+
+            attempt = await self.repository.session.get(
+                PortfolioStrategistAttempt,
+                attempt_id,
+            )
+            if attempt is not None:
+                attempt.psa_status = "succeeded"
+                attempt.psa_completed_at = utc_now()
+                await self.repository.session.commit()
+            return result
+
+        detail = " | ".join(errors)
+        raise RuntimeError(
+            f"Strategist failed after {MAX_STRATEGIST_ATTEMPTS} attempts: {detail}"
+        ) from last_error
+
     async def run_pending(self, limit: int = MAX_STRATEGIST_RUNS_PER_PASS) -> int:
         executions = 0
         while executions < limit and (run := await self.repository.claim_next_run()):
@@ -239,14 +331,12 @@ class StrategistReviewExecutor:
             run_id = run.psr_id
             try:
                 context = await self._build_context(run)
-                brain_result = await self.brain.review(context)
+                brain_result = await self._review_with_retries(run, context)
                 analysis_id = await self._save_result(
                     run,
                     context,
                     brain_result.decision.model_dump(mode="json"),
                     brain_result.raw_content,
-                    brain_result.system_instructions,
-                    brain_result.user_prompt,
                 )
                 follow_up_requests = await self._filter_recent_follow_ups(
                     brain_result.decision.follow_up_analysis
@@ -641,21 +731,7 @@ class StrategistReviewExecutor:
         context: StrategistContext,
         decision: dict,
         raw_content: str,
-        system_instructions: str,
-        user_prompt: str,
     ) -> int:
-        db_prompt = await record_prompt(
-            self.repository.session,
-            name=(
-                "Portfolio strategist full review"
-                if run.psr_review_type == "full"
-                else "Portfolio strategist targeted review"
-            ),
-            prompt_type=f"strategist_{run.psr_review_type}",
-            system_instructions=system_instructions,
-            user_prompt=user_prompt,
-        )
-        run.psr_prm_id = db_prompt.prm_id
         health_direction = {
             "good": "positive",
             "stable": "neutral",
@@ -663,7 +739,7 @@ class StrategistReviewExecutor:
             "concern": "negative",
         }[decision["portfolio_health"]]
         db_analysis = Analysis(
-            anl_prm_id=db_prompt.prm_id,
+            anl_prm_id=run.psr_prm_id,
             anl_prt_id=int(context.portfolio["portfolio_id"]),
             anl_ast_id=run.psr_ast_id,
             anl_trigger_type=f"strategist_{run.psr_review_type}",

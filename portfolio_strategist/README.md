@@ -64,3 +64,8 @@ Full responses must cover every current holding. Targeted responses must provide
 an explicit `no_action`, `watch`, `opportunity`, `warning`, or `follow_up`
 conclusion. Python rejects unknown assets, duplicate holding assessments and
 invented signal references before saving a result.
+
+Each strategist review is attempted up to three times. Every attempt stores its
+exact prompt before the provider call plus its model, status, timestamps and any
+provider or validation error. `GET /api/strategists/runs` returns this history in
+the `attempts` array even when a later retry succeeds.

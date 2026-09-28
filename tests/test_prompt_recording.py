@@ -2,7 +2,12 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock
 
-from models import AssetNiche, ClassificationAsset, PortfolioStrategistRun
+from models import (
+    AssetNiche,
+    ClassificationAsset,
+    PortfolioStrategistAttempt,
+    PortfolioStrategistRun,
+)
 from prompt.recording import record_prompt, render_prompt_snapshot
 
 
@@ -51,6 +56,7 @@ class PromptRecordingTests(unittest.TestCase):
         self.assertIn("ani_prm_id", AssetNiche.__table__.c)
         self.assertIn("cla_prm_id", ClassificationAsset.__table__.c)
         self.assertIn("psr_prm_id", PortfolioStrategistRun.__table__.c)
+        self.assertIn("psa_prm_id", PortfolioStrategistAttempt.__table__.c)
 
 
 if __name__ == "__main__":

@@ -1266,3 +1266,51 @@ class PortfolioStrategistRun(Base):
     )
     psr_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     psr_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PortfolioStrategistAttempt(Base):
+    """One durable prompt/provider attempt for a strategist run."""
+
+    __tablename__ = "portfolio_strategist_attempts"
+    __table_args__ = (
+        CheckConstraint(
+            "psa_status IN ('running', 'succeeded', 'failed')",
+            name="chk_portfolio_strategist_attempt_status",
+        ),
+        Index(
+            "uq_portfolio_strategist_attempt_number",
+            "psa_psr_id",
+            "psa_attempt",
+            unique=True,
+        ),
+    )
+
+    psa_id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+    psa_psr_id: Mapped[int] = mapped_column(
+        ForeignKey("portfolio_strategist_runs.psr_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    psa_prm_id: Mapped[int | None] = mapped_column(
+        ForeignKey("prompts.prm_id", ondelete="SET NULL")
+    )
+    psa_attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    psa_status: Mapped[str] = mapped_column(
+        String,
+        default="running",
+        server_default="running",
+        nullable=False,
+    )
+    psa_model: Mapped[str | None] = mapped_column(String)
+    psa_error: Mapped[str | None] = mapped_column(Text)
+    psa_created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    psa_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
