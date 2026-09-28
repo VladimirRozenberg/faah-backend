@@ -13,8 +13,11 @@ from assets.market_data import get_market_asset
 from live_market.redis_client import get_latest_quote
 from models import (
     Asset,
+    Niche,
     Portfolio,
     PortfolioAsset,
+    PortfolioAssetTypePreference,
+    PortfolioNichePreference,
     PortfolioStrategist,
     Transaction,
     User,
@@ -120,6 +123,23 @@ async def create_user_portfolio(
     """Create an independently configured portfolio with its own strategist."""
 
     await get_active_account(db, user_id)
+    if data.preferred_niche_ids:
+        existing_niche_ids = set(
+            (
+                await db.scalars(
+                    select(Niche.nic_id).where(
+                        Niche.nic_id.in_(data.preferred_niche_ids)
+                    )
+                )
+            ).all()
+        )
+        missing_niche_ids = sorted(
+            set(data.preferred_niche_ids) - existing_niche_ids
+        )
+        if missing_niche_ids:
+            values = ", ".join(str(item) for item in missing_niche_ids)
+            raise ValueError(f"Unknown preferred niche IDs: {values}.")
+
     portfolio = Portfolio(
         prt_usr_id=user_id,
         prt_name=data.name.strip(),
@@ -136,6 +156,22 @@ async def create_user_portfolio(
     db.add(portfolio)
     await db.flush()
     db.add(PortfolioStrategist(pst_prt_id=portfolio.prt_id))
+    db.add_all(
+        [
+            PortfolioAssetTypePreference(
+                pat_prt_id=portfolio.prt_id,
+                pat_asset_type=asset_type,
+            )
+            for asset_type in data.preferred_asset_types
+        ]
+        + [
+            PortfolioNichePreference(
+                pnp_prt_id=portfolio.prt_id,
+                pnp_nic_id=niche_id,
+            )
+            for niche_id in data.preferred_niche_ids
+        ]
+    )
     await db.commit()
     return await build_portfolio_response(db, portfolio)
 
@@ -412,6 +448,26 @@ async def build_portfolio_response(
         total_profit = total_current_value - total_invested
 
     account = await db.get(User, portfolio.prt_usr_id)
+    preferred_asset_types = list(
+        (
+            await db.scalars(
+                select(PortfolioAssetTypePreference.pat_asset_type)
+                .where(
+                    PortfolioAssetTypePreference.pat_prt_id == portfolio.prt_id
+                )
+                .order_by(PortfolioAssetTypePreference.pat_asset_type)
+            )
+        ).all()
+    )
+    preferred_niche_ids = list(
+        (
+            await db.scalars(
+                select(PortfolioNichePreference.pnp_nic_id)
+                .where(PortfolioNichePreference.pnp_prt_id == portfolio.prt_id)
+                .order_by(PortfolioNichePreference.pnp_nic_id)
+            )
+        ).all()
+    )
     return PortfolioResponse(
         balance=float(account.usr_balance),
         id=portfolio.prt_id,
@@ -426,6 +482,8 @@ async def build_portfolio_response(
             else None
         ),
         max_open_positions=portfolio.prt_max_open_positions,
+        preferred_asset_types=preferred_asset_types,
+        preferred_niche_ids=preferred_niche_ids,
         base_currency=portfolio.prt_base_currency or "USD",
         is_active=bool(portfolio.prt_is_active),
         created_at=portfolio.prt_created_at,

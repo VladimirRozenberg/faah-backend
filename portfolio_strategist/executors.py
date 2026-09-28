@@ -16,9 +16,12 @@ from models import (
     AnalysisInput,
     Asset,
     MarketOpportunityEvent,
+    Niche,
     OrchestratorAnalysisJob,
     Portfolio,
     PortfolioAsset,
+    PortfolioAssetTypePreference,
+    PortfolioNichePreference,
     PortfolioStrategist,
     PortfolioStrategistRun,
     Signal,
@@ -298,6 +301,33 @@ class StrategistReviewExecutor:
         if portfolio is None:
             raise LookupError(f"Portfolio disappeared: {strategist.pst_prt_id}")
 
+        preferred_asset_types = list(
+            (
+                await self.repository.session.scalars(
+                    select(PortfolioAssetTypePreference.pat_asset_type)
+                    .where(
+                        PortfolioAssetTypePreference.pat_prt_id == portfolio.prt_id
+                    )
+                    .order_by(PortfolioAssetTypePreference.pat_asset_type)
+                )
+            ).all()
+        )
+        preferred_niches = list(
+            (
+                await self.repository.session.scalars(
+                    select(Niche)
+                    .join(
+                        PortfolioNichePreference,
+                        PortfolioNichePreference.pnp_nic_id == Niche.nic_id,
+                    )
+                    .where(
+                        PortfolioNichePreference.pnp_prt_id == portfolio.prt_id
+                    )
+                    .order_by(Niche.nic_category, Niche.nic_name)
+                )
+            ).all()
+        )
+
         position_rows = (
             await self.repository.session.execute(
                 select(PortfolioAsset, Asset)
@@ -492,6 +522,15 @@ class StrategistReviewExecutor:
                 ),
                 "max_open_positions": portfolio.prt_max_open_positions,
                 "base_currency": portfolio.prt_base_currency,
+                "preferred_asset_types": preferred_asset_types,
+                "preferred_niches": [
+                    {
+                        "id": niche.nic_id,
+                        "name": niche.nic_name,
+                        "category": niche.nic_category,
+                    }
+                    for niche in preferred_niches
+                ],
             },
             instructions=strategist.pst_instructions,
             positions=positions,

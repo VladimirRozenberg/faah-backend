@@ -24,6 +24,8 @@ from assets.schemas import (
     AssetSummary,
     CandleResponse,
     MarketListResponse,
+    NicheItem,
+    NicheListResponse,
 )
 
 from auth.login import CurrentUser
@@ -36,6 +38,7 @@ from models import (
     Favorite,
     Forex,
     Future,
+    Niche,
     SourceClassification,
     Stock,
 )
@@ -200,6 +203,35 @@ async def list_assets(
         page=page,
         page_size=page_size,
         items=items,
+    )
+
+
+@router.get("/niches", response_model=NicheListResponse)
+async def list_niches(db: DbSession, _user: CurrentUser) -> NicheListResponse:
+    """Return the curated niche catalog used by portfolio preferences."""
+
+    niches = list(
+        (
+            await db.scalars(
+                select(Niche).order_by(
+                    Niche.nic_category,
+                    Niche.nic_name,
+                    Niche.nic_id,
+                )
+            )
+        ).all()
+    )
+    return NicheListResponse(
+        count=len(niches),
+        items=[
+            NicheItem(
+                id=niche.nic_id,
+                name=niche.nic_name,
+                category=niche.nic_category,
+                description=niche.nic_description,
+            )
+            for niche in niches
+        ],
     )
 
 

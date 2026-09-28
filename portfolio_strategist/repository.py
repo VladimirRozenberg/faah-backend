@@ -15,6 +15,8 @@ from models import (
     MarketOpportunityEvent,
     Portfolio,
     PortfolioAsset,
+    PortfolioAssetTypePreference,
+    PortfolioNichePreference,
     PortfolioStrategist,
     PortfolioStrategistRun,
     Signal,
@@ -168,6 +170,28 @@ class StrategistRepository:
                     ).all()
                 )
 
+            preferred_niches = set(
+                (
+                    await self.session.scalars(
+                        select(PortfolioNichePreference.pnp_nic_id).where(
+                            PortfolioNichePreference.pnp_prt_id
+                            == strategist.pst_prt_id
+                        )
+                    )
+                ).all()
+            )
+            preferred_asset_types = set(
+                (
+                    await self.session.scalars(
+                        select(PortfolioAssetTypePreference.pat_asset_type).where(
+                            PortfolioAssetTypePreference.pat_prt_id
+                            == strategist.pst_prt_id
+                        )
+                    )
+                ).all()
+            )
+            relevant_niches = owned_niches | preferred_niches
+
             rows = (
                 await self.session.execute(
                     select(Signal, Analysis, Asset)
@@ -215,12 +239,15 @@ class StrategistRepository:
             for signal, analysis, asset in rows:
                 owned = asset.ast_id in owned_ids
                 same_niche = bool(
-                    owned_niches.intersection(candidate_niches.get(asset.ast_id, set()))
+                    relevant_niches.intersection(
+                        candidate_niches.get(asset.ast_id, set())
+                    )
                 )
+                preferred_type = asset.ast_type in preferred_asset_types
                 compatible_opportunity = (
                     not owned
                     and signal.sig_action == "buy"
-                    and same_niche
+                    and (same_niche or preferred_type)
                     and risk_is_compatible(
                         portfolio.prt_risk_tolerance,
                         analysis.anl_risk_level,
@@ -231,7 +258,7 @@ class StrategistRepository:
                 if signal.sig_id in existing_signal_ids:
                     continue
 
-                scope = "held asset" if owned else "compatible niche opportunity"
+                scope = "held asset" if owned else "compatible portfolio preference"
                 self.session.add(
                     PortfolioStrategistRun(
                         psr_pst_id=strategist.pst_id,

@@ -92,6 +92,18 @@ class AssetListResponse(BaseModel):
     items: list[AssetListItem]
 
 
+class NicheItem(BaseModel):
+    id: int
+    name: str
+    category: str
+    description: str
+
+
+class NicheListResponse(BaseModel):
+    count: int
+    items: list[NicheItem]
+
+
 class Candle(BaseModel):
     """Prix d'ouverture, plus haut, plus bas, clôture et volume d'un intervalle."""
 

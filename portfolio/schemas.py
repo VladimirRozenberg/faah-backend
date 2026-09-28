@@ -5,7 +5,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 PortfolioStrategyType = Literal[
@@ -16,6 +16,7 @@ PortfolioStrategyType = Literal[
     "aggressive",
     "custom",
 ]
+PortfolioAssetType = Literal["stock", "crypto", "forex", "future"]
 
 
 class PortfolioCreateRequest(BaseModel):
@@ -26,12 +27,32 @@ class PortfolioCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2_000)
     strategy_type: PortfolioStrategyType | None = None
+    preferred_asset_types: list[PortfolioAssetType] = Field(
+        default_factory=list,
+        max_length=4,
+    )
+    preferred_niche_ids: list[int] = Field(default_factory=list, max_length=100)
+
     risk_tolerance: Literal["low", "medium", "high"] = "medium"
     max_position_size_pct: float = Field(default=5.0, gt=0, le=100)
     max_open_positions: int = Field(default=10, ge=1, le=1_000)
     # V1 supports USD only. Keeping the field makes future currency expansion
     # backward compatible without suggesting that FX conversion exists today.
     base_currency: Literal["USD"] = "USD"
+
+    @field_validator("preferred_asset_types", "preferred_niche_ids")
+    @classmethod
+    def preferences_must_be_unique(cls, values: list) -> list:
+        if len(values) != len(set(values)):
+            raise ValueError("Portfolio preferences cannot contain duplicates.")
+        return values
+
+    @field_validator("preferred_niche_ids")
+    @classmethod
+    def niche_ids_must_be_positive(cls, values: list[int]) -> list[int]:
+        if any(value <= 0 for value in values):
+            raise ValueError("Preferred niche IDs must be positive.")
+        return values
 
 
 class BuyAssetRequest(BaseModel):
@@ -111,6 +132,8 @@ class PortfolioResponse(BaseModel):
     risk_tolerance: str | None
     max_position_size_pct: float | None
     max_open_positions: int | None
+    preferred_asset_types: list[PortfolioAssetType]
+    preferred_niche_ids: list[int]
     base_currency: str
     is_active: bool
     created_at: datetime

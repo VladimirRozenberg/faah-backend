@@ -381,6 +381,42 @@ class Portfolio(Base):
 
 
 # ============================================================
+# OPTIONAL PORTFOLIO PREFERENCES
+# ============================================================
+
+class PortfolioAssetTypePreference(Base):
+    __tablename__ = "portfolio_asset_type_preferences"
+    __table_args__ = (
+        CheckConstraint(
+            "pat_asset_type IN ('stock', 'crypto', 'forex', 'future')",
+            name="chk_portfolio_asset_type_preference",
+        ),
+    )
+
+    pat_prt_id: Mapped[int] = mapped_column(
+        ForeignKey("portfolios.prt_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    pat_asset_type: Mapped[str] = mapped_column(
+        String,
+        primary_key=True,
+    )
+
+
+class PortfolioNichePreference(Base):
+    __tablename__ = "portfolio_niche_preferences"
+
+    pnp_prt_id: Mapped[int] = mapped_column(
+        ForeignKey("portfolios.prt_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    pnp_nic_id: Mapped[int] = mapped_column(
+        ForeignKey("niches.nic_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+
+# ============================================================
 # PORTFOLIO ASSETS
 # ============================================================
 
