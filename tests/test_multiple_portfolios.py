@@ -210,7 +210,7 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
             )
             await db.commit()
 
-            response = await list_niches(db, None)
+            response = await list_niches(db)
 
             self.assertEqual(response.count, 2)
             self.assertEqual(

@@ -216,7 +216,7 @@ async def list_assets(
 
 
 @router.get("/niches", response_model=NicheListResponse)
-async def list_niches(db: DbSession, _user: CurrentUser) -> NicheListResponse:
+async def list_niches(db: DbSession) -> NicheListResponse:
     """Return the curated niche catalog used by portfolio preferences."""
 
     niches = list(
