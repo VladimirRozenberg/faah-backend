@@ -5,7 +5,7 @@ import logging
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Response
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from assets.market_data import (
@@ -162,11 +162,19 @@ async def list_assets(
     user: CurrentUser,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    search: str = Query(default="", max_length=200),
 ) -> AssetListResponse:
-    """Retourne une page d'actifs, avec les favoris en premier."""
+    """Recherche par symbole ou nom sur toute la base, puis applique la pagination."""
+
+    filters = []
+    term = search.strip()
+    if term:
+        # ILIKE ignore la casse. Échapper % et _ pour les chercher littéralement.
+        pattern = "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        filters.append(or_(Asset.ast_symbol.ilike(pattern, escape="\\"), Asset.ast_name.ilike(pattern, escape="\\")))
 
     total = await db.scalar(
-        select(func.count()).select_from(Asset)
+        select(func.count()).select_from(Asset).where(*filters)
     ) or 0
 
     favorite_asset_ids = select(Favorite.fav_ast_id).where(
@@ -180,6 +188,7 @@ async def list_assets(
 
     result = await db.execute(
         select(Asset)
+        .where(*filters)
         .order_by(
             favorite_order,
             Asset.ast_type,
