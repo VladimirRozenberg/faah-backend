@@ -303,6 +303,18 @@ class Future(Base):
 class Portfolio(Base):
     __tablename__ = "portfolios"
 
+    __table_args__ = (
+        CheckConstraint(
+            "prt_strategy_type IS NULL OR prt_strategy_type IN "
+            "('conservative', 'income', 'balanced', 'growth', 'aggressive', 'custom')",
+            name="chk_portfolio_strategy_type",
+        ),
+        CheckConstraint(
+            "prt_base_currency = 'USD'",
+            name="chk_portfolio_base_currency",
+        ),
+    )
+
     prt_id: Mapped[int] = mapped_column(
         Integer,
         primary_key=True,
@@ -311,7 +323,7 @@ class Portfolio(Base):
 
     prt_usr_id: Mapped[int] = mapped_column(
         ForeignKey("users.usr_id"),
-        unique=True,
+        index=True,
         nullable=False,
     )
 
@@ -342,10 +354,11 @@ class Portfolio(Base):
         server_default="10",
     )
 
-    prt_base_currency: Mapped[str | None] = mapped_column(
+    prt_base_currency: Mapped[str] = mapped_column(
         String,
         default="USD",
         server_default="USD",
+        nullable=False,
     )
 
     prt_is_active: Mapped[bool | None] = mapped_column(

@@ -3,7 +3,35 @@
 """Formats des demandes et des réponses du portefeuille."""
 
 from datetime import datetime
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+PortfolioStrategyType = Literal[
+    "conservative",
+    "income",
+    "balanced",
+    "growth",
+    "aggressive",
+    "custom",
+]
+
+
+class PortfolioCreateRequest(BaseModel):
+    """Configuration for a new user-owned portfolio and its strategist."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2_000)
+    strategy_type: PortfolioStrategyType | None = None
+    risk_tolerance: Literal["low", "medium", "high"] = "medium"
+    max_position_size_pct: float = Field(default=5.0, gt=0, le=100)
+    max_open_positions: int = Field(default=10, ge=1, le=1_000)
+    # V1 supports USD only. Keeping the field makes future currency expansion
+    # backward compatible without suggesting that FX conversion exists today.
+    base_currency: Literal["USD"] = "USD"
 
 
 class BuyAssetRequest(BaseModel):
@@ -79,6 +107,10 @@ class PortfolioResponse(BaseModel):
     user_id: int
     name: str
     description: str | None
+    strategy_type: str | None
+    risk_tolerance: str | None
+    max_position_size_pct: float | None
+    max_open_positions: int | None
     base_currency: str
     is_active: bool
     created_at: datetime
@@ -90,3 +122,7 @@ class PortfolioResponse(BaseModel):
     total_profit_loss: float | None
     positions: list[PortfolioPositionResponse]
 
+
+class PortfolioListResponse(BaseModel):
+    count: int
+    items: list[PortfolioResponse]

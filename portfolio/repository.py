@@ -11,9 +11,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from assets.market_data import get_market_asset
 from live_market.redis_client import get_latest_quote
-from models import Asset, Portfolio, PortfolioAsset, Transaction, User
+from models import (
+    Asset,
+    Portfolio,
+    PortfolioAsset,
+    PortfolioStrategist,
+    Transaction,
+    User,
+)
 from portfolio.schemas import (
     BuyAssetRequest,
+    PortfolioCreateRequest,
+    PortfolioListResponse,
     PortfolioPositionResponse,
     PortfolioResponse,
     SellAssetRequest,
@@ -21,6 +30,10 @@ from portfolio.schemas import (
     TransactionResponse,
     AssetTransactionSummary,
 )
+
+
+class AmbiguousPortfolioError(ValueError):
+    """Raised when a legacy singular operation has multiple possible targets."""
 
 
 def round_value(value, digits: int = 4) -> float | None:
@@ -45,20 +58,47 @@ async def find_asset(db: AsyncSession, symbol: str) -> Asset:
     return asset
 
 
-async def get_user_portfolio(db: AsyncSession, user_id: int) -> Portfolio:
-    """Retourne le portefeuille ou le crée s'il n'existe pas."""
+async def get_user_portfolio(
+    db: AsyncSession,
+    user_id: int,
+    portfolio_id: int | None = None,
+) -> Portfolio:
+    """Resolve one owned portfolio, retaining safe legacy default creation."""
 
     user = await db.get(User, user_id)
 
     if user is None:
         raise LookupError("This user does not exist.")
 
-    portfolio = await db.scalar(
-        select(Portfolio).where(Portfolio.prt_usr_id == user_id)
+    if portfolio_id is not None:
+        portfolio = await db.scalar(
+            select(Portfolio).where(
+                Portfolio.prt_id == portfolio_id,
+                Portfolio.prt_usr_id == user_id,
+            )
+        )
+        if portfolio is None:
+            raise LookupError("This portfolio does not exist for the user.")
+        return portfolio
+
+    portfolios = list(
+        (
+            await db.scalars(
+                select(Portfolio)
+                .where(Portfolio.prt_usr_id == user_id)
+                .order_by(Portfolio.prt_id)
+                .limit(2)
+            )
+        ).all()
     )
+    if len(portfolios) > 1:
+        raise AmbiguousPortfolioError(
+            "This user has multiple portfolios; specify portfolio_id."
+        )
+    portfolio = portfolios[0] if portfolios else None
 
     if portfolio is None:
-        # Le premier accès crée le portefeuille ; les suivants le réutilisent.
+        # Preserve the original first-access behavior for existing clients.
         portfolio = Portfolio(
             prt_usr_id=user_id,
             prt_name="My portfolio",
@@ -67,8 +107,57 @@ async def get_user_portfolio(db: AsyncSession, user_id: int) -> Portfolio:
         )
         db.add(portfolio)
         await db.flush()
+        db.add(PortfolioStrategist(pst_prt_id=portfolio.prt_id))
 
     return portfolio
+
+
+async def create_user_portfolio(
+    db: AsyncSession,
+    user_id: int,
+    data: PortfolioCreateRequest,
+) -> PortfolioResponse:
+    """Create an independently configured portfolio with its own strategist."""
+
+    await get_active_account(db, user_id)
+    portfolio = Portfolio(
+        prt_usr_id=user_id,
+        prt_name=data.name.strip(),
+        prt_description=(data.description.strip() if data.description else None),
+        prt_strategy_type=(
+            data.strategy_type.strip() if data.strategy_type else None
+        ),
+        prt_risk_tolerance=data.risk_tolerance,
+        prt_max_position_size_pct=Decimal(str(data.max_position_size_pct)),
+        prt_max_open_positions=data.max_open_positions,
+        prt_base_currency=data.base_currency.strip().upper(),
+        prt_is_active=True,
+    )
+    db.add(portfolio)
+    await db.flush()
+    db.add(PortfolioStrategist(pst_prt_id=portfolio.prt_id))
+    await db.commit()
+    return await build_portfolio_response(db, portfolio)
+
+
+async def list_user_portfolios(
+    db: AsyncSession,
+    user_id: int,
+) -> PortfolioListResponse:
+    """Return every portfolio owned by one user without creating a default."""
+
+    await get_active_account(db, user_id)
+    portfolios = list(
+        (
+            await db.scalars(
+                select(Portfolio)
+                .where(Portfolio.prt_usr_id == user_id)
+                .order_by(Portfolio.prt_created_at, Portfolio.prt_id)
+            )
+        ).all()
+    )
+    items = [await build_portfolio_response(db, item) for item in portfolios]
+    return PortfolioListResponse(count=len(items), items=items)
 
 
 async def get_current_price(asset: Asset) -> float | None:
@@ -144,11 +233,12 @@ async def buy_asset(
     db: AsyncSession,
     user_id: int,
     data: BuyAssetRequest,
+    portfolio_id: int | None = None,
 ) -> PortfolioResponse:
     """Achète un actif et met la position à jour."""
 
     account = await get_active_account(db, user_id)
-    portfolio = await get_user_portfolio(db, user_id)
+    portfolio = await get_user_portfolio(db, user_id, portfolio_id)
     asset = await find_asset(db, data.symbol)
 
     # Every held asset must be visible to the live opportunity detector.
@@ -208,11 +298,12 @@ async def sell_asset(
     db: AsyncSession,
     user_id: int,
     data: SellAssetRequest,
+    portfolio_id: int | None = None,
 ) -> PortfolioResponse:
     """Vend une partie ou la totalité d'une position."""
 
     account = await get_active_account(db, user_id)
-    portfolio = await get_user_portfolio(db, user_id)
+    portfolio = await get_user_portfolio(db, user_id, portfolio_id)
     asset = await find_asset(db, data.symbol)
 
     position = await db.get(
@@ -327,6 +418,14 @@ async def build_portfolio_response(
         user_id=portfolio.prt_usr_id,
         name=portfolio.prt_name,
         description=portfolio.prt_description,
+        strategy_type=portfolio.prt_strategy_type,
+        risk_tolerance=portfolio.prt_risk_tolerance,
+        max_position_size_pct=(
+            float(portfolio.prt_max_position_size_pct)
+            if portfolio.prt_max_position_size_pct is not None
+            else None
+        ),
+        max_open_positions=portfolio.prt_max_open_positions,
         base_currency=portfolio.prt_base_currency or "USD",
         is_active=bool(portfolio.prt_is_active),
         created_at=portfolio.prt_created_at,
@@ -341,10 +440,11 @@ async def build_portfolio_response(
 async def read_user_portfolio(
     db: AsyncSession,
     user_id: int,
+    portfolio_id: int | None = None,
 ) -> PortfolioResponse:
     """Retourne le portefeuille d'un utilisateur."""
 
-    portfolio = await get_user_portfolio(db, user_id)
+    portfolio = await get_user_portfolio(db, user_id, portfolio_id)
     response = await build_portfolio_response(db, portfolio)
     await db.commit()
     return response
@@ -353,10 +453,11 @@ async def read_user_portfolio(
 async def read_transactions(
     db: AsyncSession,
     user_id: int,
+    portfolio_id: int | None = None,
 ) -> TransactionListResponse:
     """Retourne l'historique des achats et des ventes."""
 
-    portfolio = await get_user_portfolio(db, user_id)
+    portfolio = await get_user_portfolio(db, user_id, portfolio_id)
 
     result = await db.execute(
         select(Transaction, Asset)
@@ -431,4 +532,3 @@ async def deposit_cash(db, user_id, amount):
     account.usr_balance += amount
     await db.commit()
     return {"balance": float(account.usr_balance), "currency": "USD", "simulation": True}
-
