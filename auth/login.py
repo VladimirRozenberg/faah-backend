@@ -17,6 +17,7 @@ from schemas import (
     LoginRequest,
     RegisterRequest,
     TokenResponse,
+    UpdatePasswordRequest,
     UserResponse,
 )
 
@@ -86,3 +87,22 @@ async def read_current_user(user: CurrentUser) -> UserResponse:
     """Retourne les informations de l'utilisateur actuellement connecté."""
 
     return user
+
+
+@router.put("/me/password", status_code=204, response_model=None)
+async def update_current_password(
+    data: UpdatePasswordRequest,
+    user: CurrentUser,
+    db: DbSession,
+) -> None:
+    """Modifie le mot de passe de l'utilisateur actuellement connecté."""
+
+    try:
+        await auth_service.update_password(
+            user.user_id,
+            data.new_password,
+            db,
+        )
+    except Exception as error:
+        raise_http_error(error)
+        raise

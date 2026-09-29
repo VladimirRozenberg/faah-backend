@@ -8,6 +8,7 @@ from pydantic import (
     EmailStr,
     Field,
     StringConstraints,
+    field_validator,
 )
 
 
@@ -114,6 +115,17 @@ class RegisterRequest(BaseModel):
     password: str
 
 
+class UpdatePasswordRequest(BaseModel):
+    new_password: str = Field(min_length=8, max_length=72)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_password_bytes(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("Le mot de passe ne doit pas dépasser 72 octets.")
+        return value
+
+
 class TokenResponse(BaseModel):
     token: str
     message: str
@@ -124,3 +136,7 @@ class UserResponse(BaseModel):
     username: str
     role: str
     balance: float
+    email: str 
+    is_active : bool 
+    created_at : datetime
+

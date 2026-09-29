@@ -60,7 +60,7 @@ class AuthService:
         return jwt.encode(payload, TOKEN_HEX_KEY, algorithm=ALGORITHM)
 
     def _to_user_response(self, user: models.User) -> UserResponse:
-        return UserResponse(user_id=user.usr_id, username=user.usr_username, role=user.usr_role, email=user.usr_email, is_active=user.usr_is_active, balance=float(user.usr_balance))
+        return UserResponse(user_id=user.usr_id, username=user.usr_username, role=user.usr_role, email=user.usr_email, is_active=user.usr_is_active, balance=float(user.usr_balance), created_at=user.usr_created_at)
 
     async def login(self, username: str, password: str, db) -> TokenResponse:
         """Vérifie les identifiants et retourne un token d'accès."""
@@ -101,6 +101,19 @@ class AuthService:
             raise UsernameTakenError() from error
 
         return TokenResponse(token=token, message=f"Welcome {clean_username} to FAAH!")
+
+    async def update_password(self, user_id: int, new_password: str, db) -> None:
+        """Met à jour le mot de passe d'un utilisateur."""
+
+        query = select(models.User).where(models.User.usr_id == user_id)
+        result = await db.execute(query)
+        user = result.scalar_one_or_none()
+
+        if user is None:
+            raise UserNotFoundError()
+
+        user.usr_password_hash = self._hash_password(new_password)
+        await db.commit()
 
     async def get_user_from_token(self, token: str, db) -> UserResponse:
         """Décode le token et retourne l'utilisateur correspondant."""

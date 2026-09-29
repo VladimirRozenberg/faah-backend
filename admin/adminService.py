@@ -15,7 +15,7 @@ class SelfLockoutError(Exception):
 class AdminService:
 
     def _to_user_response(self, user: models.User) -> UserResponse:
-        return UserResponse(user_id=user.usr_id, username=user.usr_username, role=user.usr_role, email=user.usr_email, is_active=user.usr_is_active, balance=float(user.usr_balance))
+        return UserResponse(user_id=user.usr_id, username=user.usr_username, role=user.usr_role, email=user.usr_email, is_active=user.usr_is_active, balance=float(user.usr_balance),created_at=user.usr_created_at,)
 
     async def list_users(self, db) -> list[UserResponse]:
         """Retourne tous les utilisateurs, avec leur rôle."""
