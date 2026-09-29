@@ -2,6 +2,7 @@
 
 import unittest
 from decimal import Decimal
+from unittest.mock import AsyncMock, patch
 
 from pydantic import ValidationError
 from sqlalchemy import func, select
@@ -22,11 +23,15 @@ from portfolio.repository import (
     AmbiguousPortfolioError,
     create_user_portfolio,
     list_user_portfolios,
+    read_user_asset_value,
     read_user_portfolio,
 )
 from portfolio.schemas import PortfolioCreateRequest
 from routers.assets import list_niches, router as asset_router
-from routers.portfolios import router as portfolio_router
+from routers.portfolios import (
+    get_user_available_cash,
+    router as portfolio_router,
+)
 
 
 class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
@@ -124,6 +129,157 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
                 "specify portfolio_id",
             ):
                 await read_user_portfolio(db, user.usr_id)
+
+
+    async def test_available_cash_endpoint_returns_user_balance_once(self):
+        async with self.session_factory() as db:
+            user = User(
+                usr_username="cash-user",
+                usr_email="cash@example.com",
+                usr_password_hash="not-used-in-this-test",
+                usr_balance=Decimal("1234.56"),
+            )
+            db.add(user)
+            await db.commit()
+
+            result = await get_user_available_cash(user.usr_id, db)
+
+            self.assertEqual(result.user_id, user.usr_id)
+            self.assertEqual(result.currency, "USD")
+            self.assertEqual(result.available_cash, 1234.56)
+
+        get_paths = {
+            route.path
+            for route in portfolio_router.routes
+            if "GET" in getattr(route, "methods", set())
+        }
+        self.assertIn("/api/users/{user_id}/available-cash", get_paths)
+
+    async def test_user_asset_value_aggregates_assets_across_portfolios(self):
+        async with self.session_factory() as db:
+            user = User(
+                usr_username="valuation-user",
+                usr_email="valuation@example.com",
+                usr_password_hash="not-used-in-this-test",
+            )
+            db.add(user)
+            await db.commit()
+            first = await create_user_portfolio(
+                db,
+                user.usr_id,
+                PortfolioCreateRequest(name="First"),
+            )
+            second = await create_user_portfolio(
+                db,
+                user.usr_id,
+                PortfolioCreateRequest(name="Second"),
+            )
+            apple = Asset(
+                ast_symbol="AAPL",
+                ast_name="Apple",
+                ast_type="stock",
+                ast_currency="USD",
+            )
+            microsoft = Asset(
+                ast_symbol="MSFT",
+                ast_name="Microsoft",
+                ast_type="stock",
+                ast_currency="USD",
+            )
+            db.add_all([apple, microsoft])
+            await db.flush()
+            db.add_all(
+                [
+                    PortfolioAsset(
+                        pas_prt_id=first.id,
+                        pas_ast_id=apple.ast_id,
+                        pas_quantity=Decimal("2"),
+                        pas_average_purchase_price=Decimal("100"),
+                    ),
+                    PortfolioAsset(
+                        pas_prt_id=second.id,
+                        pas_ast_id=apple.ast_id,
+                        pas_quantity=Decimal("3"),
+                        pas_average_purchase_price=Decimal("120"),
+                    ),
+                    PortfolioAsset(
+                        pas_prt_id=second.id,
+                        pas_ast_id=microsoft.ast_id,
+                        pas_quantity=Decimal("1"),
+                        pas_average_purchase_price=Decimal("200"),
+                    ),
+                ]
+            )
+            await db.commit()
+
+            async def price(asset):
+                return {"AAPL": 150.0, "MSFT": 300.0}[asset.ast_symbol]
+
+            with patch(
+                "portfolio.repository.get_current_price",
+                new=AsyncMock(side_effect=price),
+            ) as market_price:
+                result = await read_user_asset_value(db, user.usr_id)
+
+            self.assertEqual(result.portfolios_count, 2)
+            self.assertEqual(result.assets_count, 2)
+            self.assertEqual(result.total_invested, 760.0)
+            self.assertEqual(result.total_current_value, 1050.0)
+            self.assertEqual(result.total_profit_loss, 290.0)
+            self.assertTrue(result.valuation_complete)
+            self.assertEqual(result.missing_price_symbols, [])
+            self.assertEqual(market_price.await_count, 2)
+            apple_value = next(
+                item for item in result.assets if item.symbol == "AAPL"
+            )
+            self.assertEqual(apple_value.portfolios_count, 2)
+            self.assertEqual(apple_value.total_quantity, 5.0)
+            self.assertEqual(apple_value.invested_amount, 560.0)
+            self.assertEqual(apple_value.current_value, 750.0)
+
+    async def test_user_asset_value_marks_missing_quotes_incomplete(self):
+        async with self.session_factory() as db:
+            user = User(
+                usr_username="missing-price-user",
+                usr_email="missing-price@example.com",
+                usr_password_hash="not-used-in-this-test",
+            )
+            db.add(user)
+            await db.commit()
+            portfolio = await create_user_portfolio(
+                db,
+                user.usr_id,
+                PortfolioCreateRequest(name="Only"),
+            )
+            asset = Asset(
+                ast_symbol="AAPL",
+                ast_name="Apple",
+                ast_type="stock",
+                ast_currency="USD",
+            )
+            db.add(asset)
+            await db.flush()
+            db.add(
+                PortfolioAsset(
+                    pas_prt_id=portfolio.id,
+                    pas_ast_id=asset.ast_id,
+                    pas_quantity=Decimal("2"),
+                    pas_average_purchase_price=Decimal("100"),
+                )
+            )
+            await db.commit()
+
+            with patch(
+                "portfolio.repository.get_current_price",
+                new=AsyncMock(return_value=None),
+            ):
+                result = await read_user_asset_value(db, user.usr_id)
+
+            self.assertFalse(result.valuation_complete)
+            self.assertEqual(result.missing_price_symbols, ["AAPL"])
+            self.assertIsNone(result.total_current_value)
+            self.assertIsNone(result.total_profit_loss)
+            self.assertIsNone(result.assets[0].current_value)
 
     async def test_user_cannot_read_another_users_portfolio(self):
         async with self.session_factory() as db:
@@ -235,6 +391,7 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
             if "GET" in getattr(route, "methods", set())
         }
         self.assertIn("/api/users/{user_id}/portfolios", get_paths)
+        self.assertIn("/api/users/{user_id}/asset-value", get_paths)
         niche_paths = {
             route.path
             for route in asset_router.routes

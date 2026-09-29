@@ -31,6 +31,9 @@ from portfolio.schemas import (
     SellAssetRequest,
     TransactionListResponse,
     TransactionResponse,
+    UserAvailableCashResponse,
+    UserAssetValueItem,
+    UserAssetValueResponse,
     AssetTransactionSummary,
 )
 
@@ -221,6 +224,125 @@ async def get_current_price(asset: Asset) -> float | None:
     except Exception:
         # None signifie « prix inconnu », et non « prix égal à zéro ».
         return None
+
+
+async def read_user_available_cash(
+    db: AsyncSession,
+    user_id: int,
+) -> UserAvailableCashResponse:
+    """Return available USD cash once, directly from the user account."""
+
+    account = await get_active_account(db, user_id)
+    return UserAvailableCashResponse(
+        user_id=user_id,
+        available_cash=round_value(account.usr_balance),
+    )
+
+
+async def read_user_asset_value(
+    db: AsyncSession,
+    user_id: int,
+) -> UserAssetValueResponse:
+    """Aggregate active USD holdings across every portfolio owned by one user."""
+
+    await get_active_account(db, user_id)
+    portfolios_count = (
+        await db.scalar(
+            select(func.count(Portfolio.prt_id)).where(
+                Portfolio.prt_usr_id == user_id
+            )
+        )
+        or 0
+    )
+    rows = (
+        await db.execute(
+            select(PortfolioAsset, Asset)
+            .join(Portfolio, Portfolio.prt_id == PortfolioAsset.pas_prt_id)
+            .join(Asset, Asset.ast_id == PortfolioAsset.pas_ast_id)
+            .where(
+                Portfolio.prt_usr_id == user_id,
+                PortfolioAsset.pas_is_active.is_(True),
+                PortfolioAsset.pas_quantity > 0,
+            )
+            .order_by(Asset.ast_symbol, Portfolio.prt_id)
+        )
+    ).all()
+
+    aggregated: dict[int, dict] = {}
+    for position, asset in rows:
+        entry = aggregated.setdefault(
+            asset.ast_id,
+            {
+                "asset": asset,
+                "portfolio_ids": set(),
+                "quantity": Decimal("0"),
+                "invested": Decimal("0"),
+            },
+        )
+        entry["portfolio_ids"].add(position.pas_prt_id)
+        entry["quantity"] += position.pas_quantity
+        entry["invested"] += (
+            position.pas_quantity * position.pas_average_purchase_price
+        )
+
+    ordered = sorted(
+        aggregated.values(),
+        key=lambda item: item["asset"].ast_symbol,
+    )
+    prices = await asyncio.gather(
+        *(get_current_price(item["asset"]) for item in ordered)
+    )
+
+    assets = []
+    total_invested = Decimal("0")
+    total_current_value = 0.0
+    missing_price_symbols = []
+    for entry, current_price in zip(ordered, prices):
+        asset = entry["asset"]
+        quantity = entry["quantity"]
+        invested = entry["invested"]
+        total_invested += invested
+        current_value = None
+        profit_loss = None
+        if current_price is None:
+            missing_price_symbols.append(asset.ast_symbol)
+        else:
+            current_value = float(quantity) * current_price
+            profit_loss = current_value - float(invested)
+            total_current_value += current_value
+        assets.append(
+            UserAssetValueItem(
+                asset_id=asset.ast_id,
+                symbol=asset.ast_symbol,
+                name=asset.ast_name,
+                type=asset.ast_type,
+                portfolios_count=len(entry["portfolio_ids"]),
+                total_quantity=float(quantity),
+                invested_amount=round_value(invested),
+                current_price=current_price,
+                current_value=round_value(current_value),
+                profit_loss=round_value(profit_loss),
+            )
+        )
+
+    valuation_complete = not missing_price_symbols
+    complete_current_value = total_current_value if valuation_complete else None
+    total_profit_loss = (
+        complete_current_value - float(total_invested)
+        if complete_current_value is not None
+        else None
+    )
+    return UserAssetValueResponse(
+        user_id=user_id,
+        portfolios_count=int(portfolios_count),
+        assets_count=len(assets),
+        total_invested=round_value(total_invested),
+        total_current_value=round_value(complete_current_value),
+        total_profit_loss=round_value(total_profit_loss),
+        valuation_complete=valuation_complete,
+        missing_price_symbols=missing_price_symbols,
+        assets=assets,
+    )
 
 
 def record_transaction(

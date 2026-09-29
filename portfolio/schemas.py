@@ -149,3 +149,41 @@ class PortfolioResponse(BaseModel):
 class PortfolioListResponse(BaseModel):
     count: int
     items: list[PortfolioResponse]
+
+
+class UserAvailableCashResponse(BaseModel):
+    """Available simulated cash held by one user account."""
+
+    user_id: int
+    currency: Literal["USD"] = "USD"
+    available_cash: float
+
+
+class UserAssetValueItem(BaseModel):
+    """One asset aggregated across all portfolios owned by a user."""
+
+    asset_id: int
+    symbol: str
+    name: str
+    type: str
+    portfolios_count: int
+    total_quantity: float
+    invested_amount: float
+    current_price: float | None
+    current_value: float | None
+    profit_loss: float | None
+
+
+class UserAssetValueResponse(BaseModel):
+    """USD value of every active holding across a user portfolio set."""
+
+    user_id: int
+    currency: Literal["USD"] = "USD"
+    portfolios_count: int
+    assets_count: int
+    total_invested: float
+    total_current_value: float | None
+    total_profit_loss: float | None
+    valuation_complete: bool
+    missing_price_symbols: list[str]
+    assets: list[UserAssetValueItem]
