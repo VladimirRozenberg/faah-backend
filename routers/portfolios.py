@@ -1,7 +1,9 @@
 """Routes FastAPI utilisées pour gérer les portefeuilles."""
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from db import DbSession
 from models import (
@@ -9,11 +11,13 @@ from models import (
     PortfolioRecommendation,
     PortfolioStrategist,
     PortfolioStrategistRun,
+    Signal,
 )
 from portfolio.repository import (
     AmbiguousPortfolioError,
     buy_asset,
     create_user_portfolio,
+    get_active_account,
     list_user_portfolios,
     read_transactions,
     read_user_available_cash,
@@ -38,6 +42,8 @@ from portfolio_strategist.schemas import (
     QueueStrategistReviewResponse,
     StrategistReviewListResponse,
     StrategistReviewResponse,
+    UserOpportunityListResponse,
+    UserOpportunityResponse,
 )
 
 
@@ -201,6 +207,92 @@ async def get_user_asset_value(
         return await read_user_asset_value(db, user_id)
     except LookupError as error:
         raise create_http_error(error) from error
+
+
+
+@router.get(
+    "/users/{user_id}/opportunities",
+    response_model=UserOpportunityListResponse,
+)
+async def get_user_opportunities(
+    user_id: int,
+    db: DbSession,
+    action: Literal["buy", "sell"] | None = Query(default=None),
+    status_filter: Literal["new", "viewed", "dismissed", "acted_on"] | None = Query(
+        default=None,
+        alias="status",
+    ),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> UserOpportunityListResponse:
+    """Return deduplicated strategist opportunities across owned portfolios."""
+
+    await get_active_account(db, user_id)
+    statement = (
+        select(PortfolioRecommendation, Portfolio, Signal)
+        .join(Portfolio, Portfolio.prt_id == PortfolioRecommendation.prc_prt_id)
+        .outerjoin(Signal, Signal.sig_id == PortfolioRecommendation.prc_sig_id)
+        .where(
+            Portfolio.prt_usr_id == user_id,
+            PortfolioRecommendation.prc_kind == "opportunity",
+            PortfolioRecommendation.prc_asset_symbol.is_not(None),
+        )
+        .order_by(
+            PortfolioRecommendation.prc_created_at.desc(),
+            PortfolioRecommendation.prc_id.desc(),
+        )
+        .limit(2_000)
+    )
+    if action == "sell":
+        statement = statement.where(Signal.sig_action == "sell")
+    elif action == "buy":
+        statement = statement.where(
+            or_(
+                Signal.sig_id.is_(None),
+                Signal.sig_action != "sell",
+            )
+        )
+    if status_filter is not None:
+        statement = statement.where(
+            PortfolioRecommendation.prc_status == status_filter
+        )
+
+    rows = (await db.execute(statement)).all()
+    items = []
+    seen = set()
+    for recommendation, portfolio, signal in rows:
+        recommendation_action = (
+            "sell"
+            if signal is not None and signal.sig_action == "sell"
+            else "buy"
+        )
+        key = (
+            portfolio.prt_id,
+            recommendation.prc_asset_symbol.strip().upper(),
+            recommendation_action,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(
+            UserOpportunityResponse(
+                recommendation_id=recommendation.prc_id,
+                portfolio_id=portfolio.prt_id,
+                portfolio_name=portfolio.prt_name,
+                run_id=recommendation.prc_psr_id,
+                asset_id=recommendation.prc_ast_id,
+                asset_symbol=key[1],
+                signal_id=recommendation.prc_sig_id,
+                action=recommendation_action,
+                reason=recommendation.prc_reason,
+                confidence=recommendation.prc_confidence,
+                status=recommendation.prc_status,
+                created_at=recommendation.prc_created_at,
+                updated_at=recommendation.prc_updated_at,
+            )
+        )
+        if len(items) >= limit:
+            break
+    return UserOpportunityListResponse(count=len(items), items=items)
 
 
 @router.post(

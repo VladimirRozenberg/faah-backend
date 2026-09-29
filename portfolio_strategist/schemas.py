@@ -150,6 +150,27 @@ class PortfolioRecommendationResponse(BaseModel):
     updated_at: datetime
 
 
+class UserOpportunityResponse(BaseModel):
+    recommendation_id: int
+    portfolio_id: int
+    portfolio_name: str
+    run_id: int
+    asset_id: int | None = None
+    asset_symbol: str
+    signal_id: int | None = None
+    action: Literal["buy", "sell"]
+    reason: str
+    confidence: int | None = None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class UserOpportunityListResponse(BaseModel):
+    count: int
+    items: list[UserOpportunityResponse] = Field(default_factory=list)
+
+
 class StrategistReviewResponse(BaseModel):
     run_id: int
     review_type: str
