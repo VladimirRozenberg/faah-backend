@@ -16,6 +16,8 @@ from portfolio.repository import (
     create_user_portfolio,
     list_user_portfolios,
     read_transactions,
+    read_user_available_cash,
+    read_user_asset_value,
     read_user_portfolio,
     sell_asset,
 )
@@ -26,6 +28,8 @@ from portfolio.schemas import (
     PortfolioResponse,
     SellAssetRequest,
     TransactionListResponse,
+    UserAvailableCashResponse,
+    UserAssetValueResponse,
 )
 from portfolio_strategist.repository import StrategistRepository
 from portfolio_strategist.schemas import (
@@ -162,6 +166,39 @@ async def get_user_portfolios(
 
     try:
         return await list_user_portfolios(db, user_id)
+    except LookupError as error:
+        raise create_http_error(error) from error
+
+
+
+@router.get(
+    "/users/{user_id}/available-cash",
+    response_model=UserAvailableCashResponse,
+)
+async def get_user_available_cash(
+    user_id: int,
+    db: DbSession,
+) -> UserAvailableCashResponse:
+    """Return the available simulated USD cash for one user."""
+
+    try:
+        return await read_user_available_cash(db, user_id)
+    except LookupError as error:
+        raise create_http_error(error) from error
+
+
+@router.get(
+    "/users/{user_id}/asset-value",
+    response_model=UserAssetValueResponse,
+)
+async def get_user_asset_value(
+    user_id: int,
+    db: DbSession,
+) -> UserAssetValueResponse:
+    """Return the USD value of active holdings across all user portfolios."""
+
+    try:
+        return await read_user_asset_value(db, user_id)
     except LookupError as error:
         raise create_http_error(error) from error
 
