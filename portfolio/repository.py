@@ -265,6 +265,21 @@ async def save_portfolio_transaction(
     return await build_portfolio_response(db, portfolio)
 
 
+async def check_trade_portfolio(db: AsyncSession, portfolio: Portfolio, asset: Asset) -> None:
+    """Même règle que le sélecteur Avalonia, vérifiée aussi côté serveur."""
+    if not portfolio.prt_is_active:
+        raise ValueError("This portfolio is inactive.")
+    if portfolio.prt_base_currency != "USD":
+        raise ValueError("Only USD portfolios support simulated trading.")
+    allowed_types = list((await db.scalars(
+        select(PortfolioAssetTypePreference.pat_asset_type)
+        .where(PortfolioAssetTypePreference.pat_prt_id == portfolio.prt_id)
+    )).all())
+    # Aucune préférence = tous les types. Ne pas filtrer sur le nom du portefeuille.
+    if allowed_types and asset.ast_type not in allowed_types:
+        raise ValueError("This portfolio does not allow this asset type.")
+
+
 async def buy_asset(
     db: AsyncSession,
     user_id: int,
@@ -276,6 +291,7 @@ async def buy_asset(
     account = await get_active_account(db, user_id)
     portfolio = await get_user_portfolio(db, user_id, portfolio_id)
     asset = await find_asset(db, data.symbol)
+    await check_trade_portfolio(db, portfolio, asset)
 
     # Every held asset must be visible to the live opportunity detector.
     if not asset.ast_is_tracked:
@@ -341,6 +357,7 @@ async def sell_asset(
     account = await get_active_account(db, user_id)
     portfolio = await get_user_portfolio(db, user_id, portfolio_id)
     asset = await find_asset(db, data.symbol)
+    await check_trade_portfolio(db, portfolio, asset)
 
     position = await db.get(
         PortfolioAsset,
