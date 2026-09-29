@@ -55,6 +55,18 @@ class StrategistAnalysis(BaseModel):
     created_at: datetime
 
 
+class StrategistEligibleAsset(BaseModel):
+    """A catalog-resolved asset a strategist may discuss or research."""
+
+    asset_id: int
+    symbol: str
+    name: str
+    asset_type: str
+    eligibility_reasons: list[str] = Field(default_factory=list)
+    supporting_signal_ids: list[int] = Field(default_factory=list)
+    supporting_analysis_ids: list[int] = Field(default_factory=list)
+
+
 class StrategistContext(BaseModel):
     review_type: Literal["targeted_signal", "targeted_price", "full"]
     reason: str
@@ -65,6 +77,7 @@ class StrategistContext(BaseModel):
     triggering_market_event: dict[str, Any] | None = None
     recent_signals: list[StrategistSignal] = Field(default_factory=list)
     analyses: list[StrategistAnalysis] = Field(default_factory=list)
+    eligible_assets: list[StrategistEligibleAsset] = Field(default_factory=list)
     recent_follow_up_jobs: list[dict[str, Any]] = Field(default_factory=list)
     recent_strategist_ideas: list[dict[str, Any]] = Field(default_factory=list)
 

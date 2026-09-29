@@ -15,6 +15,7 @@ from models import (
     AnalysisAsset,
     AnalysisInput,
     Asset,
+    AssetNiche,
     MarketOpportunityEvent,
     Niche,
     OrchestratorAnalysisJob,
@@ -44,6 +45,7 @@ from portfolio_strategist.repository import StrategistRepository, utc_now
 from portfolio_strategist.schemas import (
     StrategistAnalysis,
     StrategistContext,
+    StrategistEligibleAsset,
     StrategistPosition,
     StrategistSignal,
 )
@@ -498,86 +500,6 @@ class StrategistReviewExecutor:
                 source_analysis_ids.add(event.moe_result_anl_id)
 
         held_ids = {item.asset_id for item in positions}
-        recent_signals: list[StrategistSignal] = []
-        if run.psr_review_type == "full" and held_ids:
-            since = (utc_now() - timedelta(hours=2)).replace(tzinfo=None)
-            rows = (
-                await self.repository.session.execute(
-                    select(Signal, Analysis, Asset)
-                    .join(Analysis, Analysis.anl_id == Signal.sig_anl_id)
-                    .join(Asset, Asset.ast_id == Signal.sig_ast_id)
-                    .where(
-                        Signal.sig_ast_id.in_(held_ids),
-                        Signal.sig_created_at >= since,
-                    )
-                    .order_by(Signal.sig_created_at.desc(), Signal.sig_id.desc())
-                    .limit(100)
-                )
-            ).all()
-            for signal, analysis, asset in rows:
-                recent_signals.append(self._signal_schema(signal, analysis, asset))
-                source_analysis_ids.add(analysis.anl_id)
-
-        if held_ids:
-            linked_analysis_ids = select(AnalysisAsset.aas_anl_id).where(
-                AnalysisAsset.aas_ast_id.in_(held_ids)
-            )
-            recent_analysis_ids = list(
-                (
-                    await self.repository.session.scalars(
-                        select(Analysis.anl_id)
-                        .where(
-                            or_(
-                                Analysis.anl_ast_id.in_(held_ids),
-                                Analysis.anl_id.in_(linked_analysis_ids),
-                            )
-                        )
-                        .order_by(Analysis.anl_created_at.desc(), Analysis.anl_id.desc())
-                        .limit(50 if run.psr_review_type == "full" else 12)
-                    )
-                ).all()
-            )
-            source_analysis_ids.update(recent_analysis_ids)
-
-        analyses = await self._analysis_schemas(source_analysis_ids)
-        recent_follow_up_jobs = []
-        if held_ids:
-            follow_up_rows = list(
-                (
-                    await self.repository.session.scalars(
-                        select(OrchestratorAnalysisJob)
-                        .where(
-                            OrchestratorAnalysisJob.oaj_ast_id.in_(held_ids),
-                            OrchestratorAnalysisJob.oaj_requested_at
-                            >= utc_now() - timedelta(hours=24),
-                        )
-                        .order_by(
-                            OrchestratorAnalysisJob.oaj_requested_at.desc(),
-                            OrchestratorAnalysisJob.oaj_id.desc(),
-                        )
-                        .limit(30)
-                    )
-                ).all()
-            )
-            held_assets = {item.asset_id: item.symbol for item in positions}
-            for job in follow_up_rows:
-                result = (
-                    await self.repository.session.get(Analysis, job.oaj_result_anl_id)
-                    if job.oaj_result_anl_id is not None
-                    else None
-                )
-                recent_follow_up_jobs.append(
-                    {
-                        "job_id": job.oaj_id,
-                        "asset_symbol": held_assets.get(job.oaj_ast_id),
-                        "question": job.oaj_question,
-                        "reason": job.oaj_reason,
-                        "status": job.oaj_status,
-                        "result_analysis_id": job.oaj_result_anl_id,
-                        "result_summary": result.anl_summary if result else None,
-                        "error": job.oaj_error,
-                    }
-                )
         previous_rows = (
             await self.repository.session.execute(
                 select(PortfolioStrategistRun)
@@ -605,6 +527,210 @@ class StrategistReviewExecutor:
             }
             for item in previous_rows
         ]
+
+        all_assets = list(
+            (
+                await self.repository.session.scalars(
+                    select(Asset).order_by(Asset.ast_symbol)
+                )
+            ).all()
+        )
+        assets_by_id = {asset.ast_id: asset for asset in all_assets}
+        preferred_niche_ids = {niche.nic_id for niche in preferred_niches}
+        niche_asset_ids: set[int] = set()
+        if preferred_niche_ids:
+            niche_asset_ids = set(
+                (
+                    await self.repository.session.scalars(
+                        select(AssetNiche.ani_ast_id).where(
+                            AssetNiche.ani_nic_id.in_(preferred_niche_ids)
+                        )
+                    )
+                ).all()
+            )
+
+        candidate_ids = {asset.ast_id for asset in all_assets}
+        if preferred_asset_types:
+            candidate_ids &= {
+                asset.ast_id
+                for asset in all_assets
+                if asset.ast_type in preferred_asset_types
+            }
+        if preferred_niche_ids:
+            candidate_ids &= niche_asset_ids
+
+        historical_ids: set[int] = set()
+        historical_signal_ids: set[int] = set()
+        for idea in recent_ideas:
+            if idea.get("signal_id") is not None:
+                historical_signal_ids.add(int(idea["signal_id"]))
+            for opportunity in (idea.get("decision") or {}).get("opportunities", []):
+                if not isinstance(opportunity, dict):
+                    continue
+                symbol = opportunity.get("asset_symbol")
+                asset = resolve_asset_symbol(str(symbol), all_assets) if symbol else None
+                if asset is not None:
+                    historical_ids.add(asset.ast_id)
+                if opportunity.get("signal_id") is not None:
+                    historical_signal_ids.add(int(opportunity["signal_id"]))
+
+        follow_up_rows = list(
+            (
+                await self.repository.session.scalars(
+                    select(OrchestratorAnalysisJob)
+                    .where(
+                        OrchestratorAnalysisJob.oaj_requested_at
+                        >= utc_now() - timedelta(days=7),
+                    )
+                    .order_by(
+                        OrchestratorAnalysisJob.oaj_requested_at.desc(),
+                        OrchestratorAnalysisJob.oaj_id.desc(),
+                    )
+                    .limit(30)
+                )
+            ).all()
+        )
+        research_ids = {job.oaj_ast_id for job in follow_up_rows}
+        relevant_ids = held_ids | historical_ids | research_ids
+        if run.psr_review_type == "full":
+            relevant_ids |= candidate_ids
+        if triggering_signal is not None:
+            relevant_ids.add(triggering_signal.asset_id)
+        if triggering_event is not None:
+            relevant_ids.add(int(triggering_event["asset_id"]))
+
+        recent_signals: list[StrategistSignal] = []
+        if run.psr_review_type == "full" and (relevant_ids or historical_signal_ids):
+            since = (utc_now() - timedelta(hours=24)).replace(tzinfo=None)
+            signal_filter = Signal.sig_created_at >= since
+            if historical_signal_ids:
+                signal_filter = or_(
+                    signal_filter,
+                    Signal.sig_id.in_(historical_signal_ids),
+                )
+            rows = (
+                await self.repository.session.execute(
+                    select(Signal, Analysis, Asset)
+                    .join(Analysis, Analysis.anl_id == Signal.sig_anl_id)
+                    .join(Asset, Asset.ast_id == Signal.sig_ast_id)
+                    .where(
+                        or_(
+                            Signal.sig_ast_id.in_(relevant_ids),
+                            Signal.sig_id.in_(historical_signal_ids),
+                        ),
+                        signal_filter,
+                    )
+                    .order_by(Signal.sig_created_at.desc(), Signal.sig_id.desc())
+                    .limit(100)
+                )
+            ).all()
+            for signal, analysis, asset in rows:
+                relevant_ids.add(asset.ast_id)
+                recent_signals.append(self._signal_schema(signal, analysis, asset))
+                source_analysis_ids.add(analysis.anl_id)
+
+        if relevant_ids:
+            linked_analysis_ids = select(AnalysisAsset.aas_anl_id).where(
+                AnalysisAsset.aas_ast_id.in_(relevant_ids)
+            )
+            recent_analysis_ids = list(
+                (
+                    await self.repository.session.scalars(
+                        select(Analysis.anl_id)
+                        .where(
+                            or_(
+                                Analysis.anl_ast_id.in_(relevant_ids),
+                                Analysis.anl_id.in_(linked_analysis_ids),
+                            )
+                        )
+                        .order_by(Analysis.anl_created_at.desc(), Analysis.anl_id.desc())
+                        .limit(100 if run.psr_review_type == "full" else 12)
+                    )
+                ).all()
+            )
+            source_analysis_ids.update(recent_analysis_ids)
+
+        for job in follow_up_rows:
+            if job.oaj_result_anl_id is not None:
+                source_analysis_ids.add(job.oaj_result_anl_id)
+        analyses = await self._analysis_schemas(source_analysis_ids)
+
+        recent_follow_up_jobs = []
+        for job in follow_up_rows:
+            asset = assets_by_id.get(job.oaj_ast_id)
+            result = (
+                await self.repository.session.get(Analysis, job.oaj_result_anl_id)
+                if job.oaj_result_anl_id is not None
+                else None
+            )
+            recent_follow_up_jobs.append(
+                {
+                    "job_id": job.oaj_id,
+                    "asset_symbol": asset.ast_symbol if asset else None,
+                    "question": job.oaj_question,
+                    "reason": job.oaj_reason,
+                    "status": job.oaj_status,
+                    "result_analysis_id": job.oaj_result_anl_id,
+                    "result_summary": result.anl_summary if result else None,
+                    "error": job.oaj_error,
+                }
+            )
+
+        analysis_links: dict[int, set[int]] = {}
+        if source_analysis_ids:
+            link_rows = (
+                await self.repository.session.execute(
+                    select(AnalysisAsset.aas_anl_id, AnalysisAsset.aas_ast_id).where(
+                        AnalysisAsset.aas_anl_id.in_(source_analysis_ids)
+                    )
+                )
+            ).all()
+            for analysis_id, asset_id in link_rows:
+                analysis_links.setdefault(asset_id, set()).add(analysis_id)
+        for analysis in analyses:
+            if analysis.asset_id is not None:
+                analysis_links.setdefault(analysis.asset_id, set()).add(
+                    analysis.analysis_id
+                )
+
+        signal_links: dict[int, set[int]] = {}
+        for signal in recent_signals:
+            signal_links.setdefault(signal.asset_id, set()).add(signal.signal_id)
+        if triggering_signal is not None:
+            signal_links.setdefault(triggering_signal.asset_id, set()).add(
+                triggering_signal.signal_id
+            )
+
+        catalog_ids = relevant_ids | held_ids | historical_ids
+        eligible_assets = []
+        for asset in all_assets:
+            if asset.ast_id not in catalog_ids:
+                continue
+            reasons = []
+            if asset.ast_id in held_ids:
+                reasons.append("holding")
+            if asset.ast_id in candidate_ids:
+                reasons.append("portfolio_preference")
+            if asset.ast_id in research_ids:
+                reasons.append("research_request")
+            if asset.ast_id in historical_ids:
+                reasons.append("historical_review")
+            if asset.ast_id in signal_links:
+                reasons.append("signal")
+            eligible_assets.append(
+                StrategistEligibleAsset(
+                    asset_id=asset.ast_id,
+                    symbol=asset.ast_symbol,
+                    name=asset.ast_name,
+                    asset_type=asset.ast_type,
+                    eligibility_reasons=reasons,
+                    supporting_signal_ids=sorted(signal_links.get(asset.ast_id, set())),
+                    supporting_analysis_ids=sorted(
+                        analysis_links.get(asset.ast_id, set())
+                    ),
+                )
+            )
+
         return StrategistContext(
             review_type=run.psr_review_type,
             reason=run.psr_reason,
@@ -637,6 +763,7 @@ class StrategistReviewExecutor:
             triggering_market_event=triggering_event,
             recent_signals=recent_signals,
             analyses=analyses,
+            eligible_assets=eligible_assets,
             recent_follow_up_jobs=recent_follow_up_jobs,
             recent_strategist_ideas=recent_ideas,
         )

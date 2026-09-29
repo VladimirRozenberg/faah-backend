@@ -12,9 +12,12 @@ from portfolio_strategist.brain import StrategistResponseValidationError
 from portfolio_strategist.detector import detect_price_movement, risk_is_compatible
 from portfolio_strategist.executors import StrategistReviewExecutor
 from portfolio_strategist.schemas import (
+    StrategistAnalysis,
     StrategistContext,
+    StrategistEligibleAsset,
     StrategistPosition,
     StrategistReviewDecision,
+    StrategistOpportunity,
     StrategistSignal,
     HoldingAssessment,
 )
@@ -170,8 +173,6 @@ class StrategistCoverageTests(unittest.TestCase):
             )
 
     def test_historical_recommendation_nested_signal_id_is_valid_context(self):
-        from portfolio_strategist.schemas import StrategistOpportunity
-
         context = self.context()
         context.recent_strategist_ideas = [
             {
@@ -188,6 +189,16 @@ class StrategistCoverageTests(unittest.TestCase):
                     ]
                 },
             }
+        ]
+        context.recent_signals = [
+            StrategistSignal(
+                signal_id=42,
+                analysis_id=12,
+                asset_id=3,
+                asset_symbol="GC=F",
+                action="hold",
+                created_at=datetime.now(timezone.utc),
+            )
         ]
         decision = self.decision(
             assessments=[
@@ -211,6 +222,156 @@ class StrategistCoverageTests(unittest.TestCase):
 
         decision.opportunities[0].signal_id = 43
         with self.assertRaisesRegex(ValueError, "signals it was not supplied"):
+            validate_strategist_coverage(context, decision)
+
+    def test_empty_conservative_portfolio_can_return_no_recommendation(self):
+        context = StrategistContext(
+            review_type="full",
+            reason="Scheduled review",
+            portfolio={"portfolio_id": 1, "risk_tolerance": "low"},
+        )
+        decision = self.decision()
+        decision.summary = (
+            "No supplied evidence supports a conservative recommendation."
+        )
+
+        validate_strategist_coverage(context, decision)
+
+    def test_historical_asset_reference_is_eligible_without_a_holding(self):
+        context = StrategistContext(
+            review_type="full",
+            reason="Scheduled review",
+            portfolio={"portfolio_id": 1},
+            recent_strategist_ideas=[
+                {
+                    "decision": {
+                        "opportunities": [
+                            {
+                                "asset_symbol": "AAPL",
+                                "reason": "Previously researched candidate.",
+                                "confidence": 60,
+                            }
+                        ]
+                    }
+                }
+            ],
+        )
+        decision = self.decision(
+            opportunities=[
+                StrategistOpportunity(
+                    asset_symbol="AAPL",
+                    reason="The supplied historical review remains relevant.",
+                    confidence=60,
+                )
+            ]
+        )
+
+        validate_strategist_coverage(context, decision)
+
+    def test_new_catalog_asset_with_analysis_support_is_valid(self):
+        now = datetime.now(timezone.utc)
+        context = StrategistContext(
+            review_type="full",
+            reason="Scheduled review",
+            portfolio={"portfolio_id": 1},
+            analyses=[
+                StrategistAnalysis(
+                    analysis_id=99,
+                    asset_id=4,
+                    asset_symbol="AAPL",
+                    trigger_type="follow_up",
+                    summary="Completed research supports the candidate.",
+                    created_at=now,
+                )
+            ],
+            eligible_assets=[
+                StrategistEligibleAsset(
+                    asset_id=4,
+                    symbol="AAPL",
+                    name="Apple",
+                    asset_type="stock",
+                    eligibility_reasons=["portfolio_preference", "research_request"],
+                    supporting_analysis_ids=[99],
+                )
+            ],
+        )
+        decision = self.decision(
+            opportunities=[
+                StrategistOpportunity(
+                    asset_symbol="AAPL",
+                    reason="Completed research supports this new asset.",
+                    confidence=72,
+                )
+            ]
+        )
+
+        validate_strategist_coverage(context, decision)
+
+    def test_invalid_ticker_is_rejected_against_explicit_catalog(self):
+        context = StrategistContext(
+            review_type="full",
+            reason="Scheduled review",
+            portfolio={"portfolio_id": 1},
+            eligible_assets=[
+                StrategistEligibleAsset(
+                    asset_id=4,
+                    symbol="AAPL",
+                    name="Apple",
+                    asset_type="stock",
+                )
+            ],
+        )
+        decision = self.decision(
+            opportunities=[
+                StrategistOpportunity(
+                    asset_symbol="NOTREAL",
+                    reason="Unsupported ticker.",
+                    confidence=90,
+                )
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "eligible catalog"):
+            validate_strategist_coverage(context, decision)
+
+    def test_signal_must_belong_to_recommended_asset(self):
+        now = datetime.now(timezone.utc)
+        context = StrategistContext(
+            review_type="full",
+            reason="Scheduled review",
+            portfolio={"portfolio_id": 1},
+            recent_signals=[
+                StrategistSignal(
+                    signal_id=7,
+                    analysis_id=8,
+                    asset_id=4,
+                    asset_symbol="AAPL",
+                    action="buy",
+                    created_at=now,
+                )
+            ],
+            eligible_assets=[
+                StrategistEligibleAsset(
+                    asset_id=5,
+                    symbol="MSFT",
+                    name="Microsoft",
+                    asset_type="stock",
+                    supporting_signal_ids=[7],
+                )
+            ],
+        )
+        decision = self.decision(
+            opportunities=[
+                StrategistOpportunity(
+                    asset_symbol="MSFT",
+                    signal_id=7,
+                    reason="Wrongly attributed signal.",
+                    confidence=80,
+                )
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "belongs to AAPL, not MSFT"):
             validate_strategist_coverage(context, decision)
 
     def test_model_response_may_omit_optional_next_review_note(self):
