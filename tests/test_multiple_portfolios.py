@@ -30,6 +30,7 @@ from portfolio.schemas import PortfolioCreateRequest
 from routers.assets import list_niches, router as asset_router
 from routers.portfolios import (
     get_user_available_cash,
+    get_user_portfolios,
     router as portfolio_router,
 )
 
@@ -129,6 +130,76 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
                 "specify portfolio_id",
             ):
                 await read_user_portfolio(db, user.usr_id)
+
+    async def test_portfolio_list_returns_summary_with_return_and_status(self):
+        async with self.session_factory() as db:
+            user = User(
+                usr_username="summary-user",
+                usr_email="summary@example.com",
+                usr_password_hash="not-used-in-this-test",
+            )
+            db.add(user)
+            await db.commit()
+
+            invested = await create_user_portfolio(
+                db,
+                user.usr_id,
+                PortfolioCreateRequest(name="Invested", risk_tolerance="high"),
+            )
+            empty = await create_user_portfolio(
+                db,
+                user.usr_id,
+                PortfolioCreateRequest(name="Paused"),
+            )
+            paused = await db.get(Portfolio, empty.id)
+            paused.prt_is_active = False
+            asset = Asset(
+                ast_symbol="AAPL",
+                ast_name="Apple",
+                ast_type="stock",
+                ast_currency="USD",
+            )
+            db.add(asset)
+            await db.flush()
+            db.add(
+                PortfolioAsset(
+                    pas_prt_id=invested.id,
+                    pas_ast_id=asset.ast_id,
+                    pas_quantity=Decimal("2"),
+                    pas_average_purchase_price=Decimal("100"),
+                )
+            )
+            await db.commit()
+
+            with patch(
+                "portfolio.repository.get_current_price",
+                new=AsyncMock(return_value=110.0),
+            ):
+                result = await get_user_portfolios(user.usr_id, db)
+
+            self.assertEqual(result.count, 2)
+            by_name = {item.name: item for item in result.items}
+            self.assertEqual(by_name["Invested"].portfolio_id, invested.id)
+            self.assertEqual(by_name["Invested"].risk_tolerance, "high")
+            self.assertEqual(by_name["Invested"].return_pct, 10.0)
+            self.assertEqual(by_name["Invested"].status, "active")
+            self.assertIsNone(by_name["Paused"].return_pct)
+            self.assertEqual(by_name["Paused"].status, "paused")
+            self.assertNotIn("positions", by_name["Invested"].model_dump())
+
+    async def test_user_without_portfolios_gets_empty_list(self):
+        async with self.session_factory() as db:
+            user = User(
+                usr_username="empty-user",
+                usr_email="empty@example.com",
+                usr_password_hash="not-used-in-this-test",
+            )
+            db.add(user)
+            await db.commit()
+
+            result = await get_user_portfolios(user.usr_id, db)
+
+            self.assertEqual(result.model_dump(), {"count": 0, "items": []})
 
 
     async def test_available_cash_endpoint_returns_user_balance_once(self):

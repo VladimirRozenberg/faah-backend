@@ -28,8 +28,8 @@ from portfolio.repository import (
 from portfolio.schemas import (
     BuyAssetRequest,
     PortfolioCreateRequest,
-    PortfolioListResponse,
     PortfolioResponse,
+    PortfolioSummaryListResponse,
     SellAssetRequest,
     TransactionListResponse,
     UserAvailableCashResponse,
@@ -162,12 +162,12 @@ async def _recommendations_by_run(
 
 @router.get(
     "/users/{user_id}/portfolios",
-    response_model=PortfolioListResponse,
+    response_model=PortfolioSummaryListResponse,
 )
 async def get_user_portfolios(
     user_id: int,
     db: DbSession,
-) -> PortfolioListResponse:
+) -> PortfolioSummaryListResponse:
     """Return all portfolios owned by the user."""
 
     try:

@@ -25,9 +25,10 @@ from models import (
 from portfolio.schemas import (
     BuyAssetRequest,
     PortfolioCreateRequest,
-    PortfolioListResponse,
     PortfolioPositionResponse,
     PortfolioResponse,
+    PortfolioSummaryItem,
+    PortfolioSummaryListResponse,
     SellAssetRequest,
     TransactionListResponse,
     TransactionResponse,
@@ -182,7 +183,7 @@ async def create_user_portfolio(
 async def list_user_portfolios(
     db: AsyncSession,
     user_id: int,
-) -> PortfolioListResponse:
+) -> PortfolioSummaryListResponse:
     """Return every portfolio owned by one user without creating a default."""
 
     await get_active_account(db, user_id)
@@ -195,8 +196,32 @@ async def list_user_portfolios(
             )
         ).all()
     )
-    items = [await build_portfolio_response(db, item) for item in portfolios]
-    return PortfolioListResponse(count=len(items), items=items)
+    items = []
+    for portfolio in portfolios:
+        detail = await build_portfolio_response(db, portfolio)
+        return_pct = None
+        if (
+            detail.total_profit_loss is not None
+            and detail.total_invested is not None
+            and detail.total_invested > 0
+        ):
+            return_pct = round(
+                detail.total_profit_loss / detail.total_invested * 100,
+                2,
+            )
+        items.append(
+            PortfolioSummaryItem(
+                portfolio_id=portfolio.prt_id,
+                name=portfolio.prt_name,
+                description=portfolio.prt_description,
+                risk_tolerance=portfolio.prt_risk_tolerance,
+                max_open_positions=portfolio.prt_max_open_positions,
+                return_pct=return_pct,
+                base_currency=portfolio.prt_base_currency or "USD",
+                status=("active" if portfolio.prt_is_active else "paused"),
+            )
+        )
+    return PortfolioSummaryListResponse(count=len(items), items=items)
 
 
 async def get_current_price(asset: Asset) -> float | None:
