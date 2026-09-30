@@ -302,16 +302,26 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
                     prc_created_at=now,
                     prc_updated_at=now,
                 ),
+                PortfolioRecommendation(
+                    prc_psr_id=8,
+                    prc_prt_id=owned_portfolio.id,
+                    prc_kind="holding_assessment",
+                    prc_action="unchanged",
+                    prc_reason="Created on the one-hour boundary.",
+                    prc_status="new",
+                    prc_created_at=func.datetime("now", "-1 hour"),
+                    prc_updated_at=func.datetime("now", "-1 hour"),
+                ),
             ]
             db.add_all(recommendations)
             await db.commit()
 
             result = await get_user_recent_recommendations(owner.usr_id, db)
 
-            self.assertEqual(result.count, 5)
+            self.assertEqual(result.count, 7)
             self.assertEqual(
                 [item.run_id for item in result.items],
-                [4, 3, 2, 1, 5],
+                [4, 3, 2, 1, 5, 8, 6],
             )
             self.assertEqual(
                 {item.kind for item in result.items},
@@ -323,6 +333,9 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.items[0].portfolio_name, "Owned")
             self.assertEqual(result.items[0].recommendation_id, recommendations[3].prc_id)
 
+            within_one_hour = await get_user_recent_recommendations(
+                owner.usr_id, db, within="1h"
+            )
             by_kind = await get_user_recent_recommendations(
                 owner.usr_id, db, kind="opportunity"
             )
@@ -335,13 +348,25 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
                 kind="opportunity",
                 status_filter="new",
             )
-            self.assertEqual(by_kind.count, 3)
-            self.assertEqual(by_status.count, 3)
-            self.assertEqual(by_both.count, 2)
+            second_page = await get_user_recent_recommendations(
+                owner.usr_id, db, page=2, page_size=2
+            )
+            self.assertEqual(within_one_hour.count, 6)
+            self.assertEqual(
+                [item.run_id for item in within_one_hour.items],
+                [4, 3, 2, 1, 5, 8],
+            )
+            self.assertEqual(by_kind.count, 4)
+            self.assertEqual(by_status.count, 5)
+            self.assertEqual(by_both.count, 3)
             self.assertEqual(
                 [item.run_id for item in by_both.items],
-                [4, 5],
+                [4, 5, 6],
             )
+            self.assertEqual(second_page.count, 7)
+            self.assertEqual(second_page.page, 2)
+            self.assertEqual(second_page.page_size, 2)
+            self.assertEqual([item.run_id for item in second_page.items], [2, 1])
 
     async def test_recent_recommendations_reject_missing_or_disabled_users(self):
         async with self.session_factory() as db:

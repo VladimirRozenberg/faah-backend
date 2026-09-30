@@ -307,6 +307,7 @@ async def get_user_opportunities(
 async def get_user_recent_recommendations(
     user_id: int,
     db: DbSession,
+    within: Literal["1h"] | None = Query(default=None),
     kind: Literal[
         "opportunity",
         "holding_assessment",
@@ -316,32 +317,42 @@ async def get_user_recent_recommendations(
         default=None,
         alias="status",
     ),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
 ) -> UserRecentRecommendationListResponse:
-    """Return every recent recommendation from the user's own portfolios."""
+    """Return recommendations from the user's own portfolios."""
 
     try:
         await get_active_account(db, user_id)
     except LookupError as error:
         raise create_http_error(error) from error
 
+    filters = [Portfolio.prt_usr_id == user_id]
+    if within == "1h":
+        filters.append(
+            PortfolioRecommendation.prc_created_at >= database_hours_ago(db, 1)
+        )
+    if kind is not None:
+        filters.append(PortfolioRecommendation.prc_kind == kind)
+    if status_filter is not None:
+        filters.append(PortfolioRecommendation.prc_status == status_filter)
+
+    count = await db.scalar(
+        select(func.count(PortfolioRecommendation.prc_id))
+        .join(Portfolio, Portfolio.prt_id == PortfolioRecommendation.prc_prt_id)
+        .where(*filters)
+    ) or 0
     statement = (
         select(PortfolioRecommendation, Portfolio)
         .join(Portfolio, Portfolio.prt_id == PortfolioRecommendation.prc_prt_id)
-        .where(
-            Portfolio.prt_usr_id == user_id,
-            PortfolioRecommendation.prc_created_at >= database_hours_ago(db, 1),
-        )
+        .where(*filters)
         .order_by(
             PortfolioRecommendation.prc_created_at.desc(),
             PortfolioRecommendation.prc_id.desc(),
         )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     )
-    if kind is not None:
-        statement = statement.where(PortfolioRecommendation.prc_kind == kind)
-    if status_filter is not None:
-        statement = statement.where(
-            PortfolioRecommendation.prc_status == status_filter
-        )
 
     rows = (await db.execute(statement)).all()
     items = [
@@ -363,7 +374,12 @@ async def get_user_recent_recommendations(
         )
         for recommendation, portfolio in rows
     ]
-    return UserRecentRecommendationListResponse(count=len(items), items=items)
+    return UserRecentRecommendationListResponse(
+        count=count,
+        page=page,
+        page_size=page_size,
+        items=items,
+    )
 
 
 @router.post(
