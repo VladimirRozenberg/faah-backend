@@ -194,9 +194,14 @@ class UserRecentRecommendationResponse(BaseModel):
 
 class UserRecentRecommendationListResponse(BaseModel):
     count: int
+    items: list[UserRecentRecommendationResponse] = Field(default_factory=list)
+
+
+class PortfolioRecommendationPageResponse(BaseModel):
+    count: int
     page: int
     page_size: int
-    items: list[UserRecentRecommendationResponse] = Field(default_factory=list)
+    items: list[PortfolioRecommendationResponse] = Field(default_factory=list)
 
 
 class StrategistReviewResponse(BaseModel):

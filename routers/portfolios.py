@@ -47,6 +47,7 @@ from portfolio_strategist.schemas import (
     StrategistReviewResponse,
     UserOpportunityListResponse,
     UserOpportunityResponse,
+    PortfolioRecommendationPageResponse,
     UserRecentRecommendationListResponse,
     UserRecentRecommendationResponse,
 )
@@ -317,8 +318,6 @@ async def get_user_recent_recommendations(
         default=None,
         alias="status",
     ),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
 ) -> UserRecentRecommendationListResponse:
     """Return recommendations from the user's own portfolios."""
 
@@ -337,11 +336,6 @@ async def get_user_recent_recommendations(
     if status_filter is not None:
         filters.append(PortfolioRecommendation.prc_status == status_filter)
 
-    count = await db.scalar(
-        select(func.count(PortfolioRecommendation.prc_id))
-        .join(Portfolio, Portfolio.prt_id == PortfolioRecommendation.prc_prt_id)
-        .where(*filters)
-    ) or 0
     statement = (
         select(PortfolioRecommendation, Portfolio)
         .join(Portfolio, Portfolio.prt_id == PortfolioRecommendation.prc_prt_id)
@@ -350,8 +344,6 @@ async def get_user_recent_recommendations(
             PortfolioRecommendation.prc_created_at.desc(),
             PortfolioRecommendation.prc_id.desc(),
         )
-        .offset((page - 1) * page_size)
-        .limit(page_size)
     )
 
     rows = (await db.execute(statement)).all()
@@ -374,11 +366,94 @@ async def get_user_recent_recommendations(
         )
         for recommendation, portfolio in rows
     ]
-    return UserRecentRecommendationListResponse(
+    return UserRecentRecommendationListResponse(count=len(items), items=items)
+
+
+@router.get(
+    "/users/{user_id}/portfolios/{portfolio_id}/recommendations",
+    response_model=PortfolioRecommendationPageResponse,
+)
+async def get_portfolio_recommendations(
+    user_id: int,
+    portfolio_id: int,
+    db: DbSession,
+    within: Literal["1h"] | None = Query(default=None),
+    kind: Literal[
+        "opportunity",
+        "holding_assessment",
+        "targeted_conclusion",
+    ] | None = Query(default=None),
+    status_filter: Literal["new", "viewed", "dismissed", "acted_on"] | None = Query(
+        default=None,
+        alias="status",
+    ),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> PortfolioRecommendationPageResponse:
+    """Return a page of recommendations belonging to one owned portfolio."""
+
+    try:
+        await get_active_account(db, user_id)
+    except LookupError as error:
+        raise create_http_error(error) from error
+
+    owned_portfolio_id = await db.scalar(
+        select(Portfolio.prt_id).where(
+            Portfolio.prt_id == portfolio_id,
+            Portfolio.prt_usr_id == user_id,
+        )
+    )
+    if owned_portfolio_id is None:
+        raise HTTPException(status_code=404, detail="Portfolio not found for user.")
+
+    filters = [PortfolioRecommendation.prc_prt_id == portfolio_id]
+    if within == "1h":
+        filters.append(
+            PortfolioRecommendation.prc_created_at >= database_hours_ago(db, 1)
+        )
+    if kind is not None:
+        filters.append(PortfolioRecommendation.prc_kind == kind)
+    if status_filter is not None:
+        filters.append(PortfolioRecommendation.prc_status == status_filter)
+
+    count = await db.scalar(
+        select(func.count(PortfolioRecommendation.prc_id)).where(*filters)
+    ) or 0
+    rows = list(
+        (
+            await db.scalars(
+                select(PortfolioRecommendation)
+                .where(*filters)
+                .order_by(
+                    PortfolioRecommendation.prc_created_at.desc(),
+                    PortfolioRecommendation.prc_id.desc(),
+                )
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        ).all()
+    )
+    return PortfolioRecommendationPageResponse(
         count=count,
         page=page,
         page_size=page_size,
-        items=items,
+        items=[
+            PortfolioRecommendationResponse(
+                recommendation_id=item.prc_id,
+                run_id=item.prc_psr_id,
+                kind=item.prc_kind,
+                asset_id=item.prc_ast_id,
+                asset_symbol=item.prc_asset_symbol,
+                signal_id=item.prc_sig_id,
+                action=item.prc_action,
+                reason=item.prc_reason,
+                confidence=item.prc_confidence,
+                status=item.prc_status,
+                created_at=item.prc_created_at,
+                updated_at=item.prc_updated_at,
+            )
+            for item in rows
+        ],
     )
 
 
