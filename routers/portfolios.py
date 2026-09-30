@@ -35,7 +35,10 @@ from portfolio.schemas import (
     UserAvailableCashResponse,
     UserAssetValueResponse,
 )
-from portfolio_strategist.repository import StrategistRepository
+from portfolio_strategist.repository import (
+    StrategistRepository,
+    database_hours_ago,
+)
 from portfolio_strategist.schemas import (
     PortfolioRecommendationResponse,
     PortfolioStrategistResponse,
@@ -44,6 +47,8 @@ from portfolio_strategist.schemas import (
     StrategistReviewResponse,
     UserOpportunityListResponse,
     UserOpportunityResponse,
+    UserRecentRecommendationListResponse,
+    UserRecentRecommendationResponse,
 )
 
 
@@ -293,6 +298,72 @@ async def get_user_opportunities(
         if len(items) >= limit:
             break
     return UserOpportunityListResponse(count=len(items), items=items)
+
+
+@router.get(
+    "/users/{user_id}/recommendations/recent",
+    response_model=UserRecentRecommendationListResponse,
+)
+async def get_user_recent_recommendations(
+    user_id: int,
+    db: DbSession,
+    kind: Literal[
+        "opportunity",
+        "holding_assessment",
+        "targeted_conclusion",
+    ] | None = Query(default=None),
+    status_filter: Literal["new", "viewed", "dismissed", "acted_on"] | None = Query(
+        default=None,
+        alias="status",
+    ),
+) -> UserRecentRecommendationListResponse:
+    """Return every recent recommendation from the user's own portfolios."""
+
+    try:
+        await get_active_account(db, user_id)
+    except LookupError as error:
+        raise create_http_error(error) from error
+
+    statement = (
+        select(PortfolioRecommendation, Portfolio)
+        .join(Portfolio, Portfolio.prt_id == PortfolioRecommendation.prc_prt_id)
+        .where(
+            Portfolio.prt_usr_id == user_id,
+            PortfolioRecommendation.prc_created_at >= database_hours_ago(db, 1),
+        )
+        .order_by(
+            PortfolioRecommendation.prc_created_at.desc(),
+            PortfolioRecommendation.prc_id.desc(),
+        )
+    )
+    if kind is not None:
+        statement = statement.where(PortfolioRecommendation.prc_kind == kind)
+    if status_filter is not None:
+        statement = statement.where(
+            PortfolioRecommendation.prc_status == status_filter
+        )
+
+    rows = (await db.execute(statement)).all()
+    items = [
+        UserRecentRecommendationResponse(
+            recommendation_id=recommendation.prc_id,
+            portfolio_id=portfolio.prt_id,
+            portfolio_name=portfolio.prt_name,
+            run_id=recommendation.prc_psr_id,
+            kind=recommendation.prc_kind,
+            asset_id=recommendation.prc_ast_id,
+            asset_symbol=recommendation.prc_asset_symbol,
+            signal_id=recommendation.prc_sig_id,
+            action=recommendation.prc_action,
+            reason=recommendation.prc_reason,
+            confidence=recommendation.prc_confidence,
+            status=recommendation.prc_status,
+            created_at=recommendation.prc_created_at,
+            updated_at=recommendation.prc_updated_at,
+        )
+        for recommendation, portfolio in rows
+    ]
+    return UserRecentRecommendationListResponse(count=len(items), items=items)
 
 
 @router.post(

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
@@ -31,6 +31,12 @@ EVENT_COOLDOWN = timedelta(minutes=15)
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def database_hours_ago(session: AsyncSession, hours: int):
+    if session.get_bind().dialect.name == "sqlite":
+        return func.datetime("now", f"-{hours} hours")
+    return func.now() - text(f"INTERVAL '{hours} hours'")
 
 
 class StrategistRepository:

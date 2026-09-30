@@ -171,6 +171,32 @@ class UserOpportunityListResponse(BaseModel):
     items: list[UserOpportunityResponse] = Field(default_factory=list)
 
 
+class UserRecentRecommendationResponse(BaseModel):
+    recommendation_id: int
+    portfolio_id: int
+    portfolio_name: str
+    run_id: int
+    kind: Literal[
+        "opportunity",
+        "holding_assessment",
+        "targeted_conclusion",
+    ]
+    asset_id: int | None = None
+    asset_symbol: str | None = None
+    signal_id: int | None = None
+    action: str
+    reason: str
+    confidence: int | None = None
+    status: Literal["new", "viewed", "dismissed", "acted_on"]
+    created_at: datetime
+    updated_at: datetime
+
+
+class UserRecentRecommendationListResponse(BaseModel):
+    count: int
+    items: list[UserRecentRecommendationResponse] = Field(default_factory=list)
+
+
 class StrategistReviewResponse(BaseModel):
     run_id: int
     review_type: str
