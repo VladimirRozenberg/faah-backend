@@ -8,7 +8,6 @@ from routers import (
     classifications,
     data_sources,
     health,
-    niches,
     live_market,
     orchestrator,
     strategists,
@@ -125,7 +124,6 @@ app = FastAPI(
 )
 
 app.include_router(health.router)
-app.include_router(niches.router)
 app.include_router(assets.router)
 app.include_router(live_market.router)
 app.include_router(portfolios.router)
