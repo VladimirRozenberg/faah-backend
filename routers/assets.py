@@ -210,7 +210,13 @@ async def list_assets(
     ):
         selected = [value.strip() for value in values or [] if value.strip()]
         if selected:
-            filters.append(column.in_(set(selected)))
+            # Recherche partielle, insensible à la casse, avant la pagination.
+            # Échapper les caractères spéciaux pour que la saisie reste littérale.
+            patterns = [
+                "%" + value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+                for value in selected
+            ]
+            filters.append(or_(*(column.ilike(pattern, escape="\\") for pattern in patterns)))
 
     stock_sectors = [value.strip() for value in sector or [] if value.strip()]
     if stock_sectors:

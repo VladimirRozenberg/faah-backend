@@ -162,6 +162,18 @@ class AssetSearchTests(unittest.IsolatedAsyncioTestCase):
                 await db.commit()
 
                 with patch("routers.assets.get_market_assets", return_value=[]):
+                    # Une saisie incomplète fonctionne aussi sur les pages suivantes.
+                    partial = await list_assets(
+                        db, SimpleNamespace(user_id=1), page=2, page_size=1,
+                        search="", country=["un"], currency=["us"],
+                    )
+                    self.assertEqual(partial.count, 2)
+                    self.assertEqual(len(partial.items), 1)
+                    literal = await list_assets(
+                        db, SimpleNamespace(user_id=1), page=1, page_size=20,
+                        search="", country=["%_"],
+                    )
+                    self.assertEqual(literal.count, 0)
                     stock_results = await list_assets(
                         db,
                         SimpleNamespace(user_id=1),
@@ -170,9 +182,9 @@ class AssetSearchTests(unittest.IsolatedAsyncioTestCase):
                         search="",
                         asset_type=["stock"],
                         niche_id=[niche.nic_id],
-                        exchange=["NMS"],
-                        country=["United States"],
-                        currency=["USD"],
+                        exchange=["nm"],
+                        country=["uNi"],
+                        currency=["us"],
                         sector=["Technology"],
                         industry=["Software"],
                     )
