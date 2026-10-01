@@ -9,10 +9,17 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from assets.schemas import AssetSummary
 from db import Base
 from models import Asset, AssetNiche, Favorite, Forex, Niche, Stock, User
-from routers.assets import list_assets
+from routers.assets import list_assets, router
 
 
 class AssetSearchTests(unittest.IsolatedAsyncioTestCase):
+    def test_filter_lists_are_url_parameters_not_json_body(self):
+        route = next(route for route in router.routes if route.path == "/api/assets")
+        names = {parameter.name for parameter in route.dependant.query_params}
+        self.assertTrue({"asset_type", "niche_id", "exchange", "country", "currency",
+                         "sector", "industry", "base_currency", "quote_currency"} <= names)
+        self.assertEqual(route.dependant.body_params, [])
+
     async def test_search_before_pagination(self):
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
         try:

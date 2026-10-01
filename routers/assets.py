@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Response
@@ -166,15 +166,16 @@ async def list_assets(
     page_size: int = Query(default=20, ge=1, le=100),
     search: str = Query(default="", max_length=200),
     favorites_only: bool = False,
-    asset_type: list[Literal["stock", "crypto", "forex", "future"]] | None = None,
-    niche_id: list[int] | None = None,
-    exchange: list[str] | None = None,
-    country: list[str] | None = None,
-    currency: list[str] | None = None,
-    sector: list[str] | None = None,
-    industry: list[str] | None = None,
-    base_currency: list[str] | None = None,
-    quote_currency: list[str] | None = None,
+    # Query indique que ces listes viennent de l'URL, et non d'un corps JSON.
+    asset_type: Annotated[list[Literal["stock", "crypto", "forex", "future"]] | None, Query()] = None,
+    niche_id: Annotated[list[int] | None, Query()] = None,
+    exchange: Annotated[list[str] | None, Query()] = None,
+    country: Annotated[list[str] | None, Query()] = None,
+    currency: Annotated[list[str] | None, Query()] = None,
+    sector: Annotated[list[str] | None, Query()] = None,
+    industry: Annotated[list[str] | None, Query()] = None,
+    base_currency: Annotated[list[str] | None, Query()] = None,
+    quote_currency: Annotated[list[str] | None, Query()] = None,
 ) -> AssetListResponse:
     """Filter the catalog before pagination and attach market data to this page."""
 
