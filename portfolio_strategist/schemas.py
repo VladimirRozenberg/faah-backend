@@ -151,28 +151,7 @@ class PortfolioRecommendationResponse(BaseModel):
     updated_at: datetime
 
 
-class UserOpportunityResponse(BaseModel):
-    recommendation_id: int
-    portfolio_id: int
-    portfolio_name: str
-    run_id: int
-    asset_id: int | None = None
-    asset_symbol: str
-    signal_id: int | None = None
-    action: Literal["buy", "sell"]
-    reason: str
-    confidence: int | None = None
-    status: str
-    created_at: datetime
-    updated_at: datetime
-
-
-class UserOpportunityListResponse(BaseModel):
-    count: int
-    items: list[UserOpportunityResponse] = Field(default_factory=list)
-
-
-class UserRecentRecommendationResponse(BaseModel):
+class UserRecommendationResponse(BaseModel):
     recommendation_id: int
     portfolio_id: int
     portfolio_name: str
@@ -193,9 +172,11 @@ class UserRecentRecommendationResponse(BaseModel):
     updated_at: datetime
 
 
-class UserRecentRecommendationListResponse(BaseModel):
+class UserRecommendationPageResponse(BaseModel):
     count: int
-    items: list[UserRecentRecommendationResponse] = Field(default_factory=list)
+    page: int
+    page_size: int
+    items: list[UserRecommendationResponse] = Field(default_factory=list)
 
 
 class PortfolioRecommendationPageResponse(BaseModel):

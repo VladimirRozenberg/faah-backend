@@ -3,7 +3,7 @@
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 
 from db import DbSession
 from models import (
@@ -11,7 +11,6 @@ from models import (
     PortfolioRecommendation,
     PortfolioStrategist,
     PortfolioStrategistRun,
-    Signal,
 )
 from portfolio.repository import (
     AmbiguousPortfolioError,
@@ -47,11 +46,9 @@ from portfolio_strategist.schemas import (
     QueueStrategistReviewResponse,
     StrategistReviewListResponse,
     StrategistReviewResponse,
-    UserOpportunityListResponse,
-    UserOpportunityResponse,
     PortfolioRecommendationPageResponse,
-    UserRecentRecommendationListResponse,
-    UserRecentRecommendationResponse,
+    UserRecommendationPageResponse,
+    UserRecommendationResponse,
 )
 
 
@@ -219,95 +216,10 @@ async def get_user_asset_value(
 
 
 @router.get(
-    "/users/{user_id}/opportunities",
-    response_model=UserOpportunityListResponse,
+    "/users/{user_id}/recommendations",
+    response_model=UserRecommendationPageResponse,
 )
-async def get_user_opportunities(
-    user_id: int,
-    db: DbSession,
-    action: Literal["buy", "sell"] | None = Query(default=None),
-    status_filter: Literal["new", "viewed", "dismissed", "acted_on"] | None = Query(
-        default=None,
-        alias="status",
-    ),
-    limit: int = Query(default=50, ge=1, le=200),
-) -> UserOpportunityListResponse:
-    """Return deduplicated strategist opportunities across owned portfolios."""
-
-    await get_active_account(db, user_id)
-    statement = (
-        select(PortfolioRecommendation, Portfolio, Signal)
-        .join(Portfolio, Portfolio.prt_id == PortfolioRecommendation.prc_prt_id)
-        .outerjoin(Signal, Signal.sig_id == PortfolioRecommendation.prc_sig_id)
-        .where(
-            Portfolio.prt_usr_id == user_id,
-            PortfolioRecommendation.prc_kind == "opportunity",
-            PortfolioRecommendation.prc_asset_symbol.is_not(None),
-        )
-        .order_by(
-            PortfolioRecommendation.prc_created_at.desc(),
-            PortfolioRecommendation.prc_id.desc(),
-        )
-        .limit(2_000)
-    )
-    if action == "sell":
-        statement = statement.where(Signal.sig_action == "sell")
-    elif action == "buy":
-        statement = statement.where(
-            or_(
-                Signal.sig_id.is_(None),
-                Signal.sig_action != "sell",
-            )
-        )
-    if status_filter is not None:
-        statement = statement.where(
-            PortfolioRecommendation.prc_status == status_filter
-        )
-
-    rows = (await db.execute(statement)).all()
-    items = []
-    seen = set()
-    for recommendation, portfolio, signal in rows:
-        recommendation_action = (
-            "sell"
-            if signal is not None and signal.sig_action == "sell"
-            else "buy"
-        )
-        key = (
-            portfolio.prt_id,
-            recommendation.prc_asset_symbol.strip().upper(),
-            recommendation_action,
-        )
-        if key in seen:
-            continue
-        seen.add(key)
-        items.append(
-            UserOpportunityResponse(
-                recommendation_id=recommendation.prc_id,
-                portfolio_id=portfolio.prt_id,
-                portfolio_name=portfolio.prt_name,
-                run_id=recommendation.prc_psr_id,
-                asset_id=recommendation.prc_ast_id,
-                asset_symbol=key[1],
-                signal_id=recommendation.prc_sig_id,
-                action=recommendation_action,
-                reason=recommendation.prc_reason,
-                confidence=recommendation.prc_confidence,
-                status=recommendation.prc_status,
-                created_at=recommendation.prc_created_at,
-                updated_at=recommendation.prc_updated_at,
-            )
-        )
-        if len(items) >= limit:
-            break
-    return UserOpportunityListResponse(count=len(items), items=items)
-
-
-@router.get(
-    "/users/{user_id}/recommendations/recent",
-    response_model=UserRecentRecommendationListResponse,
-)
-async def get_user_recent_recommendations(
+async def get_user_recommendations(
     user_id: int,
     db: DbSession,
     within: Literal["1h"] | None = Query(default=None),
@@ -320,8 +232,10 @@ async def get_user_recent_recommendations(
         default=None,
         alias="status",
     ),
-) -> UserRecentRecommendationListResponse:
-    """Return recommendations from the user's own portfolios."""
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> UserRecommendationPageResponse:
+    """Return a filtered page of recommendations across the user's portfolios."""
 
     try:
         await get_active_account(db, user_id)
@@ -338,19 +252,26 @@ async def get_user_recent_recommendations(
     if status_filter is not None:
         filters.append(PortfolioRecommendation.prc_status == status_filter)
 
-    statement = (
-        select(PortfolioRecommendation, Portfolio)
+    count = await db.scalar(
+        select(func.count(PortfolioRecommendation.prc_id))
         .join(Portfolio, Portfolio.prt_id == PortfolioRecommendation.prc_prt_id)
         .where(*filters)
-        .order_by(
-            PortfolioRecommendation.prc_created_at.desc(),
-            PortfolioRecommendation.prc_id.desc(),
-        )
     )
-
-    rows = (await db.execute(statement)).all()
+    rows = (
+        await db.execute(
+            select(PortfolioRecommendation, Portfolio)
+            .join(Portfolio, Portfolio.prt_id == PortfolioRecommendation.prc_prt_id)
+            .where(*filters)
+            .order_by(
+                PortfolioRecommendation.prc_created_at.desc(),
+                PortfolioRecommendation.prc_id.desc(),
+            )
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).all()
     items = [
-        UserRecentRecommendationResponse(
+        UserRecommendationResponse(
             recommendation_id=recommendation.prc_id,
             portfolio_id=portfolio.prt_id,
             portfolio_name=portfolio.prt_name,
@@ -368,7 +289,12 @@ async def get_user_recent_recommendations(
         )
         for recommendation, portfolio in rows
     ]
-    return UserRecentRecommendationListResponse(count=len(items), items=items)
+    return UserRecommendationPageResponse(
+        count=count or 0,
+        page=page,
+        page_size=page_size,
+        items=items,
+    )
 
 
 @router.get(

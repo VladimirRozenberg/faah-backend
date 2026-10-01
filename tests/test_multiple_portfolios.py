@@ -35,7 +35,7 @@ from routers.assets import list_niches, router as asset_router
 from routers.portfolios import (
     get_user_available_cash,
     get_user_portfolios,
-    get_user_recent_recommendations,
+    get_user_recommendations,
     get_portfolio_recommendations,
     router as portfolio_router,
 )
@@ -359,15 +359,19 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
             db.add_all(recommendations)
             await db.commit()
 
-            result = await get_user_recent_recommendations(
+            result = await get_user_recommendations(
                 owner.usr_id,
                 db,
                 within=None,
                 kind=None,
                 status_filter=None,
+                page=1,
+                page_size=20,
             )
 
             self.assertEqual(result.count, 7)
+            self.assertEqual(result.page, 1)
+            self.assertEqual(result.page_size, 20)
             self.assertEqual(
                 [item.run_id for item in result.items],
                 [4, 3, 2, 1, 8, 5, 6],
@@ -383,33 +387,50 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.items[0].portfolio_name, "Owned")
             self.assertEqual(result.items[0].recommendation_id, recommendations[3].prc_id)
 
-            within_one_hour = await get_user_recent_recommendations(
+            within_one_hour = await get_user_recommendations(
                 owner.usr_id,
                 db,
                 within="1h",
                 kind=None,
                 status_filter=None,
+                page=1,
+                page_size=20,
             )
-            by_kind = await get_user_recent_recommendations(
+            by_kind = await get_user_recommendations(
                 owner.usr_id,
                 db,
                 within=None,
                 kind="opportunity",
                 status_filter=None,
+                page=1,
+                page_size=20,
             )
-            by_status = await get_user_recent_recommendations(
+            by_status = await get_user_recommendations(
                 owner.usr_id,
                 db,
                 within=None,
                 kind=None,
                 status_filter="new",
+                page=1,
+                page_size=20,
             )
-            by_both = await get_user_recent_recommendations(
+            by_both = await get_user_recommendations(
                 owner.usr_id,
                 db,
                 within=None,
                 kind="opportunity",
                 status_filter="new",
+                page=1,
+                page_size=20,
+            )
+            second_user_page = await get_user_recommendations(
+                owner.usr_id,
+                db,
+                within=None,
+                kind=None,
+                status_filter=None,
+                page=2,
+                page_size=2,
             )
             second_page = await get_portfolio_recommendations(
                 owner.usr_id,
@@ -433,6 +454,10 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
                 [item.run_id for item in by_both.items],
                 [4, 5, 6],
             )
+            self.assertEqual(second_user_page.count, 7)
+            self.assertEqual(second_user_page.page, 2)
+            self.assertEqual(second_user_page.page_size, 2)
+            self.assertEqual([item.run_id for item in second_user_page.items], [2, 1])
             self.assertEqual(second_page.count, 7)
             self.assertEqual(second_page.page, 2)
             self.assertEqual(second_page.page_size, 2)
@@ -450,10 +475,13 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
                 )
             self.assertEqual(not_owned.exception.status_code, 404)
 
-    async def test_recent_recommendations_reject_missing_or_disabled_users(self):
+    async def test_recommendations_reject_missing_or_disabled_users(self):
         async with self.session_factory() as db:
             with self.assertRaises(HTTPException) as missing:
-                await get_user_recent_recommendations(999, db)
+                await get_user_recommendations(
+                    999, db, within=None, kind=None, status_filter=None,
+                    page=1, page_size=20,
+                )
             self.assertEqual(missing.exception.status_code, 404)
 
             user = User(
@@ -466,7 +494,10 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
             await db.commit()
 
             with self.assertRaises(HTTPException) as disabled:
-                await get_user_recent_recommendations(user.usr_id, db)
+                await get_user_recommendations(
+                    user.usr_id, db, within=None, kind=None, status_filter=None,
+                    page=1, page_size=20,
+                )
             self.assertEqual(disabled.exception.status_code, 404)
 
     async def test_available_cash_endpoint_returns_user_balance_once(self):

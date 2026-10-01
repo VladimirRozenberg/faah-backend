@@ -43,7 +43,6 @@ from portfolio_strategist.schemas import (
     HoldingAssessment,
 )
 from prompt.response_models import FinancialAnalysisResult
-from routers.portfolios import get_user_opportunities
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -891,70 +890,6 @@ class StrategistRecommendationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(recommendations[1].prc_confidence, 73)
         self.assertTrue(all(item.prc_prt_id == 2 for item in recommendations))
-
-
-
-class UserOpportunityEndpointTests(unittest.IsolatedAsyncioTestCase):
-    async def test_maps_signal_actions_and_deduplicates_old_asset_reviews(self):
-        now = datetime.now(timezone.utc)
-
-        def recommendation(item_id, symbol, signal_id, created_at):
-            return SimpleNamespace(
-                prc_id=item_id,
-                prc_prt_id=3,
-                prc_psr_id=item_id + 100,
-                prc_ast_id=item_id,
-                prc_asset_symbol=symbol,
-                prc_sig_id=signal_id,
-                prc_reason=f"{symbol} opportunity",
-                prc_confidence=80,
-                prc_status="new",
-                prc_created_at=created_at,
-                prc_updated_at=created_at,
-            )
-
-        portfolio = SimpleNamespace(prt_id=3, prt_name="Dashboard")
-        rows = [
-            (
-                recommendation(3, "AAPL", 30, now),
-                portfolio,
-                SimpleNamespace(sig_action="buy"),
-            ),
-            (
-                recommendation(2, "MSFT", 20, now - timedelta(minutes=1)),
-                portfolio,
-                SimpleNamespace(sig_action="sell"),
-            ),
-            (
-                recommendation(1, "AAPL", 10, now - timedelta(minutes=2)),
-                portfolio,
-                SimpleNamespace(sig_action="buy"),
-            ),
-        ]
-        db = SimpleNamespace(
-            execute=AsyncMock(
-                return_value=SimpleNamespace(all=lambda: rows)
-            )
-        )
-
-        with patch(
-            "routers.portfolios.get_active_account",
-            new=AsyncMock(),
-        ):
-            result = await get_user_opportunities(
-                user_id=7,
-                db=db,
-                action=None,
-                status_filter=None,
-                limit=50,
-            )
-
-        self.assertEqual(result.count, 2)
-        self.assertEqual(
-            [(item.asset_symbol, item.action) for item in result.items],
-            [("AAPL", "buy"), ("MSFT", "sell")],
-        )
-        self.assertEqual(result.items[0].recommendation_id, 3)
 
 
 
