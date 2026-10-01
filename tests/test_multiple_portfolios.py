@@ -1,9 +1,11 @@
 """Integration coverage for the user-to-portfolios one-to-many relationship."""
 
 import unittest
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -16,6 +18,7 @@ from models import (
     PortfolioAsset,
     PortfolioAssetTypePreference,
     PortfolioNichePreference,
+    PortfolioRecommendation,
     PortfolioStrategist,
     User,
 )
@@ -30,6 +33,9 @@ from portfolio.schemas import PortfolioCreateRequest
 from routers.assets import list_niches, router as asset_router
 from routers.portfolios import (
     get_user_available_cash,
+    get_user_portfolios,
+    get_user_recent_recommendations,
+    get_portfolio_recommendations,
     router as portfolio_router,
 )
 
@@ -48,6 +54,7 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
                 PortfolioNichePreference,
                 PortfolioAsset,
                 PortfolioStrategist,
+                PortfolioRecommendation,
             ]
         ]
         async with self.engine.begin() as connection:
@@ -130,6 +137,295 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
             ):
                 await read_user_portfolio(db, user.usr_id)
 
+    async def test_portfolio_list_returns_summary_with_return_and_status(self):
+        async with self.session_factory() as db:
+            user = User(
+                usr_username="summary-user",
+                usr_email="summary@example.com",
+                usr_password_hash="not-used-in-this-test",
+            )
+            db.add(user)
+            await db.commit()
+
+            invested = await create_user_portfolio(
+                db,
+                user.usr_id,
+                PortfolioCreateRequest(name="Invested", risk_tolerance="high"),
+            )
+            empty = await create_user_portfolio(
+                db,
+                user.usr_id,
+                PortfolioCreateRequest(name="Paused"),
+            )
+            paused = await db.get(Portfolio, empty.id)
+            paused.prt_is_active = False
+            asset = Asset(
+                ast_symbol="AAPL",
+                ast_name="Apple",
+                ast_type="stock",
+                ast_currency="USD",
+            )
+            db.add(asset)
+            await db.flush()
+            db.add(
+                PortfolioAsset(
+                    pas_prt_id=invested.id,
+                    pas_ast_id=asset.ast_id,
+                    pas_quantity=Decimal("2"),
+                    pas_average_purchase_price=Decimal("100"),
+                )
+            )
+            await db.commit()
+
+            with patch(
+                "portfolio.repository.get_current_price",
+                new=AsyncMock(return_value=110.0),
+            ):
+                result = await get_user_portfolios(user.usr_id, db)
+
+            self.assertEqual(result.count, 2)
+            by_name = {item.name: item for item in result.items}
+            self.assertEqual(by_name["Invested"].portfolio_id, invested.id)
+            self.assertEqual(by_name["Invested"].risk_tolerance, "high")
+            self.assertEqual(by_name["Invested"].return_pct, 10.0)
+            self.assertEqual(by_name["Invested"].status, "active")
+            self.assertIsNone(by_name["Paused"].return_pct)
+            self.assertEqual(by_name["Paused"].status, "paused")
+            self.assertNotIn("positions", by_name["Invested"].model_dump())
+
+    async def test_user_without_portfolios_gets_empty_list(self):
+        async with self.session_factory() as db:
+            user = User(
+                usr_username="empty-user",
+                usr_email="empty@example.com",
+                usr_password_hash="not-used-in-this-test",
+            )
+            db.add(user)
+            await db.commit()
+
+            result = await get_user_portfolios(user.usr_id, db)
+
+            self.assertEqual(result.model_dump(), {"count": 0, "items": []})
+
+    async def test_recent_recommendations_preserve_rows_actions_and_ownership(self):
+        async with self.session_factory() as db:
+            owner = User(
+                usr_username="recommendation-owner",
+                usr_email="recommendation-owner@example.com",
+                usr_password_hash="not-used-in-this-test",
+            )
+            other = User(
+                usr_username="recommendation-other",
+                usr_email="recommendation-other@example.com",
+                usr_password_hash="not-used-in-this-test",
+            )
+            db.add_all([owner, other])
+            await db.commit()
+            owned_portfolio = await create_user_portfolio(
+                db, owner.usr_id, PortfolioCreateRequest(name="Owned")
+            )
+            other_portfolio = await create_user_portfolio(
+                db, other.usr_id, PortfolioCreateRequest(name="Other")
+            )
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            recommendations = [
+                PortfolioRecommendation(
+                    prc_psr_id=1,
+                    prc_prt_id=owned_portfolio.id,
+                    prc_kind="holding_assessment",
+                    prc_action="bad",
+                    prc_reason="Risk increased.",
+                    prc_status="viewed",
+                    prc_created_at=now - timedelta(minutes=45),
+                    prc_updated_at=now - timedelta(minutes=45),
+                ),
+                PortfolioRecommendation(
+                    prc_psr_id=2,
+                    prc_prt_id=owned_portfolio.id,
+                    prc_kind="targeted_conclusion",
+                    prc_action="no_action",
+                    prc_reason="No change is needed.",
+                    prc_status="new",
+                    prc_created_at=now - timedelta(minutes=20),
+                    prc_updated_at=now - timedelta(minutes=20),
+                ),
+                PortfolioRecommendation(
+                    prc_psr_id=3,
+                    prc_prt_id=owned_portfolio.id,
+                    prc_kind="opportunity",
+                    prc_asset_symbol="NVDA",
+                    prc_action="opportunity",
+                    prc_reason="A possible opportunity.",
+                    prc_confidence=80,
+                    prc_status="dismissed",
+                    prc_created_at=now - timedelta(minutes=10),
+                    prc_updated_at=now - timedelta(minutes=10),
+                ),
+                PortfolioRecommendation(
+                    prc_psr_id=4,
+                    prc_prt_id=owned_portfolio.id,
+                    prc_kind="opportunity",
+                    prc_asset_symbol="NVDA",
+                    prc_action="opportunity",
+                    prc_reason="A separate strategist output.",
+                    prc_confidence=75,
+                    prc_status="new",
+                    prc_created_at=now - timedelta(minutes=5),
+                    prc_updated_at=now - timedelta(minutes=5),
+                ),
+                PortfolioRecommendation(
+                    prc_psr_id=5,
+                    prc_prt_id=owned_portfolio.id,
+                    prc_kind="opportunity",
+                    prc_action="watch",
+                    prc_reason="Still within the recent window.",
+                    prc_status="new",
+                    prc_created_at=now - timedelta(minutes=59),
+                    prc_updated_at=now - timedelta(minutes=59),
+                ),
+                PortfolioRecommendation(
+                    prc_psr_id=6,
+                    prc_prt_id=owned_portfolio.id,
+                    prc_kind="opportunity",
+                    prc_action="opportunity",
+                    prc_reason="Too old.",
+                    prc_status="new",
+                    prc_created_at=now - timedelta(minutes=61),
+                    prc_updated_at=now - timedelta(minutes=61),
+                ),
+                PortfolioRecommendation(
+                    prc_psr_id=7,
+                    prc_prt_id=other_portfolio.id,
+                    prc_kind="opportunity",
+                    prc_action="opportunity",
+                    prc_reason="Belongs to another user.",
+                    prc_status="new",
+                    prc_created_at=now,
+                    prc_updated_at=now,
+                ),
+                PortfolioRecommendation(
+                    prc_psr_id=8,
+                    prc_prt_id=owned_portfolio.id,
+                    prc_kind="holding_assessment",
+                    prc_action="unchanged",
+                    prc_reason="Created inside the one-hour window.",
+                    prc_status="new",
+                    prc_created_at=now - timedelta(minutes=59),
+                    prc_updated_at=now - timedelta(minutes=59),
+                ),
+            ]
+            db.add_all(recommendations)
+            await db.commit()
+
+            result = await get_user_recent_recommendations(
+                owner.usr_id,
+                db,
+                within=None,
+                kind=None,
+                status_filter=None,
+            )
+
+            self.assertEqual(result.count, 7)
+            self.assertEqual(
+                [item.run_id for item in result.items],
+                [4, 3, 2, 1, 8, 5, 6],
+                [(item.run_id, item.created_at) for item in result.items],
+            )
+            self.assertEqual(
+                {item.kind for item in result.items},
+                {"opportunity", "holding_assessment", "targeted_conclusion"},
+            )
+            self.assertEqual(result.items[0].action, "opportunity")
+            self.assertEqual(result.items[2].action, "no_action")
+            self.assertEqual(result.items[3].action, "bad")
+            self.assertEqual(result.items[0].portfolio_name, "Owned")
+            self.assertEqual(result.items[0].recommendation_id, recommendations[3].prc_id)
+
+            within_one_hour = await get_user_recent_recommendations(
+                owner.usr_id,
+                db,
+                within="1h",
+                kind=None,
+                status_filter=None,
+            )
+            by_kind = await get_user_recent_recommendations(
+                owner.usr_id,
+                db,
+                within=None,
+                kind="opportunity",
+                status_filter=None,
+            )
+            by_status = await get_user_recent_recommendations(
+                owner.usr_id,
+                db,
+                within=None,
+                kind=None,
+                status_filter="new",
+            )
+            by_both = await get_user_recent_recommendations(
+                owner.usr_id,
+                db,
+                within=None,
+                kind="opportunity",
+                status_filter="new",
+            )
+            second_page = await get_portfolio_recommendations(
+                owner.usr_id,
+                owned_portfolio.id,
+                db,
+                within=None,
+                kind=None,
+                status_filter=None,
+                page=2,
+                page_size=2,
+            )
+            self.assertEqual(within_one_hour.count, 6)
+            self.assertEqual(
+                [item.run_id for item in within_one_hour.items],
+                [4, 3, 2, 1, 8, 5],
+            )
+            self.assertEqual(by_kind.count, 4)
+            self.assertEqual(by_status.count, 5)
+            self.assertEqual(by_both.count, 3)
+            self.assertEqual(
+                [item.run_id for item in by_both.items],
+                [4, 5, 6],
+            )
+            self.assertEqual(second_page.count, 7)
+            self.assertEqual(second_page.page, 2)
+            self.assertEqual(second_page.page_size, 2)
+            self.assertEqual([item.run_id for item in second_page.items], [2, 1])
+            with self.assertRaises(HTTPException) as not_owned:
+                await get_portfolio_recommendations(
+                    owner.usr_id,
+                    other_portfolio.id,
+                    db,
+                    within=None,
+                    kind=None,
+                    status_filter=None,
+                    page=1,
+                    page_size=20,
+                )
+            self.assertEqual(not_owned.exception.status_code, 404)
+
+    async def test_recent_recommendations_reject_missing_or_disabled_users(self):
+        async with self.session_factory() as db:
+            with self.assertRaises(HTTPException) as missing:
+                await get_user_recent_recommendations(999, db)
+            self.assertEqual(missing.exception.status_code, 404)
+
+            user = User(
+                usr_username="disabled-recommendation-user",
+                usr_email="disabled-recommendation@example.com",
+                usr_password_hash="not-used-in-this-test",
+                usr_is_active=False,
+            )
+            db.add(user)
+            await db.commit()
+
+            with self.assertRaises(HTTPException) as disabled:
+                await get_user_recent_recommendations(user.usr_id, db)
+            self.assertEqual(disabled.exception.status_code, 404)
 
     async def test_available_cash_endpoint_returns_user_balance_once(self):
         async with self.session_factory() as db:

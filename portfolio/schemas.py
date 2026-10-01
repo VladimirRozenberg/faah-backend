@@ -151,6 +151,22 @@ class PortfolioListResponse(BaseModel):
     items: list[PortfolioResponse]
 
 
+class PortfolioSummaryItem(BaseModel):
+    portfolio_id: int
+    name: str
+    description: str | None
+    risk_tolerance: Literal["low", "medium", "high", "very_high"] | None
+    max_open_positions: int | None
+    return_pct: float | None
+    base_currency: str
+    status: Literal["active", "paused"]
+
+
+class PortfolioSummaryListResponse(BaseModel):
+    count: int
+    items: list[PortfolioSummaryItem]
+
+
 class UserAvailableCashResponse(BaseModel):
     """Available simulated cash held by one user account."""
 

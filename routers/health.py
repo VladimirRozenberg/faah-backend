@@ -7,6 +7,7 @@ from fastapi import APIRouter, Request
 from sqlalchemy import func, select, text
 
 from db import DbSession
+from external_health import get_external_health
 from models import (
     OrchestratorAnalysisJob,
     PortfolioStrategist,
@@ -27,6 +28,12 @@ from schemas import (
 
 
 router = APIRouter(tags=["Système"])
+
+
+@router.get("/health/external")
+async def external_sources_health():
+    """Séparé de /health pour ne pas ralentir le contrôle interne du serveur."""
+    return await get_external_health()
 
 
 def _configured(name: str) -> bool:
