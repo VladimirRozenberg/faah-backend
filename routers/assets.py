@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Response
@@ -32,6 +33,7 @@ from auth.login import CurrentUser
 from db import DbSession
 from models import (
     Asset,
+    AssetNiche,
     ClassificationAsset,
     Crypto,
     DataSource,
@@ -164,8 +166,17 @@ async def list_assets(
     page_size: int = Query(default=20, ge=1, le=100),
     search: str = Query(default="", max_length=200),
     favorites_only: bool = False,
+    asset_type: list[Literal["stock", "crypto", "forex", "future"]] | None = None,
+    niche_id: list[int] | None = None,
+    exchange: list[str] | None = None,
+    country: list[str] | None = None,
+    currency: list[str] | None = None,
+    sector: list[str] | None = None,
+    industry: list[str] | None = None,
+    base_currency: list[str] | None = None,
+    quote_currency: list[str] | None = None,
 ) -> AssetListResponse:
-    """Filtre par recherche et favoris de l'utilisateur avant la pagination."""
+    """Filter the catalog before pagination and attach market data to this page."""
 
     filters = []
     term = search.strip()
@@ -179,6 +190,68 @@ async def list_assets(
     )
     if favorites_only:
         filters.append(Asset.ast_id.in_(favorite_asset_ids))
+
+    if asset_type:
+        filters.append(Asset.ast_type.in_(asset_type))
+    if niche_id:
+        filters.append(
+            Asset.ast_id.in_(
+                select(AssetNiche.ani_ast_id).where(
+                    AssetNiche.ani_nic_id.in_(set(niche_id))
+                )
+            )
+        )
+
+    for values, column in (
+        (exchange, Asset.ast_exchange),
+        (country, Asset.ast_country),
+        (currency, Asset.ast_currency),
+    ):
+        selected = [value.strip() for value in values or [] if value.strip()]
+        if selected:
+            filters.append(column.in_(set(selected)))
+
+    stock_sectors = [value.strip() for value in sector or [] if value.strip()]
+    if stock_sectors:
+        filters.append(
+            Asset.ast_id.in_(
+                select(Stock.sto_ast_id).where(Stock.sto_sector.in_(set(stock_sectors)))
+            )
+        )
+
+    stock_industries = [value.strip() for value in industry or [] if value.strip()]
+    if stock_industries:
+        filters.append(
+            Asset.ast_id.in_(
+                select(Stock.sto_ast_id).where(
+                    Stock.sto_industry.in_(set(stock_industries))
+                )
+            )
+        )
+
+    forex_base_currencies = [
+        value.strip() for value in base_currency or [] if value.strip()
+    ]
+    if forex_base_currencies:
+        filters.append(
+            Asset.ast_id.in_(
+                select(Forex.for_ast_id).where(
+                    Forex.for_base_currency.in_(set(forex_base_currencies))
+                )
+            )
+        )
+
+    forex_quote_currencies = [
+        value.strip() for value in quote_currency or [] if value.strip()
+    ]
+    if forex_quote_currencies:
+        filters.append(
+            Asset.ast_id.in_(
+                select(Forex.for_ast_id).where(
+                    Forex.for_quote_currency.in_(set(forex_quote_currencies))
+                )
+            )
+        )
 
     total = await db.scalar(
         select(func.count()).select_from(Asset).where(*filters)

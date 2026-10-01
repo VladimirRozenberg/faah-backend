@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from assets.schemas import AssetSummary
 from db import Base
-from models import Asset, Favorite, Stock, User
+from models import Asset, AssetNiche, Favorite, Forex, Niche, Stock, User
 from routers.assets import list_assets
 
 
@@ -87,5 +87,102 @@ class AssetSearchTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(unmatched.items, [])
                     unfiltered = await list_assets(db, user, page=1, page_size=20, search="", favorites_only=False)
                     self.assertEqual(unfiltered.count, 4)
+        finally:
+            await engine.dispose()
+
+    async def test_catalog_filters_compose_before_pagination(self):
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        try:
+            tables = [
+                User,
+                Asset,
+                AssetNiche,
+                Favorite,
+                Forex,
+                Niche,
+                Stock,
+            ]
+            async with engine.begin() as connection:
+                await connection.run_sync(
+                    lambda sync_connection: Base.metadata.create_all(
+                        sync_connection,
+                        tables=[model.__table__ for model in tables],
+                    )
+                )
+
+            async with async_sessionmaker(engine, expire_on_commit=False)() as db:
+                apple = Asset(
+                    ast_symbol="AAPL",
+                    ast_name="Apple Inc.",
+                    ast_type="stock",
+                    ast_exchange="NMS",
+                    ast_country="United States",
+                    ast_currency="USD",
+                )
+                euro_dollar = Asset(
+                    ast_symbol="EURUSD=X",
+                    ast_name="EUR/USD",
+                    ast_type="forex",
+                    ast_exchange="CCY",
+                    ast_country="United States",
+                    ast_currency="USD",
+                )
+                niche = Niche(
+                    nic_name="Enterprise Software",
+                    nic_category="Technology & AI",
+                    nic_description="Enterprise software companies",
+                )
+                db.add_all([apple, euro_dollar, niche])
+                await db.flush()
+                db.add_all(
+                    [
+                        Stock(
+                            sto_ast_id=apple.ast_id,
+                            sto_sector="Technology",
+                            sto_industry="Software",
+                        ),
+                        Forex(
+                            for_ast_id=euro_dollar.ast_id,
+                            for_base_currency="EUR",
+                            for_quote_currency="USD",
+                        ),
+                        AssetNiche(
+                            ani_ast_id=apple.ast_id,
+                            ani_nic_id=niche.nic_id,
+                        ),
+                    ]
+                )
+                await db.commit()
+
+                with patch("routers.assets.get_market_assets", return_value=[]):
+                    stock_results = await list_assets(
+                        db,
+                        SimpleNamespace(user_id=1),
+                        page=1,
+                        page_size=20,
+                        search="",
+                        asset_type=["stock"],
+                        niche_id=[niche.nic_id],
+                        exchange=["NMS"],
+                        country=["United States"],
+                        currency=["USD"],
+                        sector=["Technology"],
+                        industry=["Software"],
+                    )
+                    forex_results = await list_assets(
+                        db,
+                        SimpleNamespace(user_id=1),
+                        page=1,
+                        page_size=20,
+                        search="",
+                        asset_type=["forex"],
+                        base_currency=["EUR"],
+                        quote_currency=["USD"],
+                    )
+
+                self.assertEqual(stock_results.count, 1)
+                self.assertEqual([item.symbol for item in stock_results.items], ["AAPL"])
+                self.assertEqual(forex_results.count, 1)
+                self.assertEqual([item.symbol for item in forex_results.items], ["EURUSD=X"])
         finally:
             await engine.dispose()
