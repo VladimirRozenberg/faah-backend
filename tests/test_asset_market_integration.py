@@ -54,7 +54,13 @@ class AssetMarketIntegrationTests(unittest.IsolatedAsyncioTestCase):
             "routers.assets.get_market_assets",
             return_value=[summary],
         ) as market:
-            response = await list_assets(db, user, page=1, page_size=20)
+            response = await list_assets(
+                db,
+                user,
+                page=1,
+                page_size=20,
+                search="",
+            )
 
         market.assert_called_once_with([asset])
         self.assertEqual(response.items[0].market, summary)
@@ -73,7 +79,13 @@ class AssetMarketIntegrationTests(unittest.IsolatedAsyncioTestCase):
             "routers.assets.get_market_assets",
             side_effect=MarketDataUnavailableError("Yahoo unavailable"),
         ):
-            response = await list_assets(db, user, page=1, page_size=20)
+            response = await list_assets(
+                db,
+                user,
+                page=1,
+                page_size=20,
+                search="",
+            )
 
         self.assertEqual(response.items[0].symbol, "AAPL")
         self.assertIsNone(response.items[0].market)
