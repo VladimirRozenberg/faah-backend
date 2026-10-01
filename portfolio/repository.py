@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import select, func, case
+from sqlalchemy import delete, select, func, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from assets.market_data import get_market_asset
@@ -29,6 +29,7 @@ from portfolio.schemas import (
     PortfolioResponse,
     PortfolioSummaryItem,
     PortfolioSummaryListResponse,
+    PortfolioUpdateRequest,
     SellAssetRequest,
     TransactionListResponse,
     TransactionResponse,
@@ -176,6 +177,92 @@ async def create_user_portfolio(
             for niche_id in data.preferred_niche_ids
         ]
     )
+    await db.commit()
+    return await build_portfolio_response(db, portfolio)
+
+
+async def update_user_portfolio(
+    db: AsyncSession,
+    user_id: int,
+    portfolio_id: int,
+    data: PortfolioUpdateRequest,
+) -> PortfolioResponse:
+    """Apply a partial update to one portfolio owned by an active user."""
+
+    await get_active_account(db, user_id)
+    portfolio = await get_user_portfolio(db, user_id, portfolio_id)
+    updates = data.model_dump(exclude_unset=True)
+
+    niche_ids = updates.get("preferred_niche_ids")
+    if niche_ids:
+        existing_niche_ids = set(
+            (
+                await db.scalars(
+                    select(Niche.nic_id).where(Niche.nic_id.in_(niche_ids))
+                )
+            ).all()
+        )
+        missing_niche_ids = sorted(set(niche_ids) - existing_niche_ids)
+        if missing_niche_ids:
+            values = ", ".join(str(item) for item in missing_niche_ids)
+            raise ValueError(f"Unknown preferred niche IDs: {values}.")
+
+    field_map = {
+        "name": "prt_name",
+        "description": "prt_description",
+        "strategy_type": "prt_strategy_type",
+        "risk_tolerance": "prt_risk_tolerance",
+        "max_position_size_pct": "prt_max_position_size_pct",
+        "max_open_positions": "prt_max_open_positions",
+        "base_currency": "prt_base_currency",
+        "is_active": "prt_is_active",
+    }
+    for field, value in updates.items():
+        if field in field_map and (
+            value is not None
+            or field in {"description", "strategy_type", "max_position_size_pct"}
+        ):
+            if field == "name":
+                value = value.strip()
+            elif field == "max_position_size_pct":
+                value = Decimal(str(value)) if value is not None else None
+            elif field == "base_currency":
+                value = value.strip().upper()
+            setattr(portfolio, field_map[field], value)
+
+    if "preferred_asset_types" in updates and updates["preferred_asset_types"] is not None:
+        await db.execute(
+            delete(PortfolioAssetTypePreference).where(
+                PortfolioAssetTypePreference.pat_prt_id == portfolio_id
+            )
+        )
+        db.add_all(
+            [
+                PortfolioAssetTypePreference(
+                    pat_prt_id=portfolio_id,
+                    pat_asset_type=asset_type,
+                )
+                for asset_type in updates["preferred_asset_types"]
+            ]
+        )
+
+    if niche_ids is not None:
+        await db.execute(
+            delete(PortfolioNichePreference).where(
+                PortfolioNichePreference.pnp_prt_id == portfolio_id
+            )
+        )
+        db.add_all(
+            [
+                PortfolioNichePreference(
+                    pnp_prt_id=portfolio_id,
+                    pnp_nic_id=niche_id,
+                )
+                for niche_id in niche_ids
+            ]
+        )
+
+    portfolio.prt_updated_at = datetime.now()
     await db.commit()
     return await build_portfolio_response(db, portfolio)
 

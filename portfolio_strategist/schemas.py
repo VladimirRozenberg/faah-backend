@@ -74,6 +74,7 @@ class StrategistContext(BaseModel):
     instructions: str | None = None
     positions: list[StrategistPosition] = Field(default_factory=list)
     triggering_signal: StrategistSignal | None = None
+    triggering_signals: list[StrategistSignal] = Field(default_factory=list)
     triggering_market_event: dict[str, Any] | None = None
     recent_signals: list[StrategistSignal] = Field(default_factory=list)
     analyses: list[StrategistAnalysis] = Field(default_factory=list)

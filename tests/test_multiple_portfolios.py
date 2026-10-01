@@ -28,8 +28,9 @@ from portfolio.repository import (
     list_user_portfolios,
     read_user_asset_value,
     read_user_portfolio,
+    update_user_portfolio,
 )
-from portfolio.schemas import PortfolioCreateRequest
+from portfolio.schemas import PortfolioCreateRequest, PortfolioUpdateRequest
 from routers.assets import list_niches, router as asset_router
 from routers.portfolios import (
     get_user_available_cash,
@@ -192,6 +193,47 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(by_name["Paused"].return_pct)
             self.assertEqual(by_name["Paused"].status, "paused")
             self.assertNotIn("positions", by_name["Invested"].model_dump())
+
+    async def test_portfolio_update_can_pause_without_resetting_configuration(self):
+        async with self.session_factory() as db:
+            user = User(
+                usr_username="pause-update-user",
+                usr_email="pause-update@example.com",
+                usr_password_hash="not-used-in-this-test",
+            )
+            niche = Niche(
+                nic_name="Update niche",
+                nic_category="Technology",
+                nic_description="Portfolio update test niche",
+            )
+            db.add_all([user, niche])
+            await db.commit()
+
+            created = await create_user_portfolio(
+                db,
+                user.usr_id,
+                PortfolioCreateRequest(
+                    name="Configured",
+                    description="Keep this description",
+                    risk_tolerance="high",
+                    preferred_asset_types=["stock"],
+                    preferred_niche_ids=[niche.nic_id],
+                ),
+            )
+
+            paused = await update_user_portfolio(
+                db,
+                user.usr_id,
+                created.id,
+                PortfolioUpdateRequest(is_active=False),
+            )
+
+            self.assertFalse(paused.is_active)
+            self.assertEqual(paused.name, "Configured")
+            self.assertEqual(paused.description, "Keep this description")
+            self.assertEqual(paused.risk_tolerance, "high")
+            self.assertEqual(paused.preferred_asset_types, ["stock"])
+            self.assertEqual(paused.preferred_niche_ids, [niche.nic_id])
 
     async def test_user_without_portfolios_gets_empty_list(self):
         async with self.session_factory() as db:

@@ -28,7 +28,7 @@ from portfolio_strategist.repository import StrategistRepository
 
 
 logger = logging.getLogger(__name__)
-SCAN_SECONDS = 60
+SCAN_SECONDS = 20 * 60
 
 
 def configured_threshold_pct() -> float:
@@ -40,7 +40,7 @@ def configured_threshold_pct() -> float:
 
 
 async def scan_tracked_prices(repository: StrategistRepository) -> int:
-    """Compare the latest quote with the preceding minute-level sample."""
+    """Compare the latest quote with the preceding sample."""
 
     assets = list(
         (

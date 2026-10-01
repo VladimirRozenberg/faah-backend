@@ -19,13 +19,14 @@ from models import (
     PortfolioNichePreference,
     PortfolioStrategist,
     PortfolioStrategistRun,
+    PortfolioStrategistRunSignal,
     Signal,
 )
 from portfolio_strategist.detector import risk_is_compatible
 from portfolio_strategist.schemas import PriceMovement
 
 
-FULL_REVIEW_INTERVAL = timedelta(hours=2)
+FULL_REVIEW_INTERVAL = timedelta(hours=12)
 EVENT_COOLDOWN = timedelta(minutes=15)
 
 
@@ -242,6 +243,22 @@ class StrategistRepository:
                     )
                 ).all()
             )
+            existing_signal_ids.update(
+                (
+                    await self.session.scalars(
+                        select(PortfolioStrategistRunSignal.psrs_sig_id)
+                        .join(
+                            PortfolioStrategistRun,
+                            PortfolioStrategistRun.psr_id
+                            == PortfolioStrategistRunSignal.psrs_psr_id,
+                        )
+                        .where(
+                            PortfolioStrategistRun.psr_pst_id == strategist.pst_id
+                        )
+                    )
+                ).all()
+            )
+            batched_signals = []
             for signal, analysis, asset in rows:
                 owned = asset.ast_id in owned_ids
                 same_niche = bool(
@@ -264,22 +281,38 @@ class StrategistRepository:
                 if signal.sig_id in existing_signal_ids:
                     continue
 
-                scope = "held asset" if owned else "compatible portfolio preference"
-                self.session.add(
-                    PortfolioStrategistRun(
-                        psr_pst_id=strategist.pst_id,
-                        psr_ast_id=asset.ast_id,
-                        psr_sig_id=signal.sig_id,
-                        psr_review_type="targeted_signal",
-                        psr_status="pending",
-                        psr_priority=(
-                            5 if owned and signal.sig_action == "sell" else 4
-                        ),
-                        psr_reason=(
-                            f"New {signal.sig_action} signal for {asset.ast_symbol} "
-                            f"({scope}); confidence={signal.sig_confidence}."
-                        ),
-                    )
+                batched_signals.append((signal, asset, owned))
+
+            if batched_signals:
+                signal_ids = [signal.sig_id for signal, _, _ in batched_signals]
+                asset_ids = {asset.ast_id for _, asset, _ in batched_signals}
+                symbols = sorted({asset.ast_symbol for _, asset, _ in batched_signals})
+                has_held_sell = any(
+                    owned and signal.sig_action == "sell"
+                    for signal, _, owned in batched_signals
+                )
+                run = PortfolioStrategistRun(
+                    psr_pst_id=strategist.pst_id,
+                    psr_ast_id=next(iter(asset_ids)) if len(asset_ids) == 1 else None,
+                    psr_sig_id=signal_ids[0],
+                    psr_review_type="targeted_signal",
+                    psr_status="pending",
+                    psr_priority=5 if has_held_sell else 4,
+                    psr_reason=(
+                        f"Batched {len(signal_ids)} new signal(s) for "
+                        f"{', '.join(symbols)}."
+                    ),
+                )
+                self.session.add(run)
+                await self.session.flush()
+                self.session.add_all(
+                    [
+                        PortfolioStrategistRunSignal(
+                            psrs_psr_id=run.psr_id,
+                            psrs_sig_id=signal_id,
+                        )
+                        for signal_id in signal_ids
+                    ]
                 )
                 queued += 1
 
@@ -311,8 +344,13 @@ class StrategistRepository:
                             PortfolioAsset,
                             PortfolioAsset.pas_prt_id == PortfolioStrategist.pst_prt_id,
                         )
+                        .join(
+                            Portfolio,
+                            Portfolio.prt_id == PortfolioStrategist.pst_prt_id,
+                        )
                         .where(
                             PortfolioStrategist.pst_status == "active",
+                            Portfolio.prt_is_active.is_(True),
                             PortfolioAsset.pas_ast_id == event.moe_ast_id,
                             PortfolioAsset.pas_is_active.is_(True),
                         )
@@ -382,7 +420,7 @@ class StrategistRepository:
                         psr_review_type="full",
                         psr_status="pending",
                         psr_priority=3,
-                        psr_reason="Scheduled two-hour portfolio and ideas review.",
+                        psr_reason="Scheduled twelve-hour portfolio and ideas review.",
                     )
                 )
                 queued += 1
@@ -417,7 +455,19 @@ class StrategistRepository:
     async def claim_next_run(self) -> PortfolioStrategistRun | None:
         run = await self.session.scalar(
             select(PortfolioStrategistRun)
+            .join(
+                PortfolioStrategist,
+                PortfolioStrategist.pst_id == PortfolioStrategistRun.psr_pst_id,
+            )
+            .join(
+                Portfolio,
+                Portfolio.prt_id == PortfolioStrategist.pst_prt_id,
+            )
             .where(PortfolioStrategistRun.psr_status == "pending")
+            .where(
+                PortfolioStrategist.pst_status == "active",
+                Portfolio.prt_is_active.is_(True),
+            )
             .order_by(
                 PortfolioStrategistRun.psr_priority.desc(),
                 PortfolioStrategistRun.psr_created_at,
@@ -434,9 +484,27 @@ class StrategistRepository:
         return run
 
     async def claim_next_event(self) -> MarketOpportunityEvent | None:
+        assets_with_active_strategists = (
+            select(PortfolioAsset.pas_ast_id)
+            .join(Portfolio, Portfolio.prt_id == PortfolioAsset.pas_prt_id)
+            .join(
+                PortfolioStrategist,
+                PortfolioStrategist.pst_prt_id == Portfolio.prt_id,
+            )
+            .where(
+                PortfolioAsset.pas_is_active.is_(True),
+                Portfolio.prt_is_active.is_(True),
+                PortfolioStrategist.pst_status == "active",
+            )
+        )
         event = await self.session.scalar(
             select(MarketOpportunityEvent)
-            .where(MarketOpportunityEvent.moe_status == "detected")
+            .where(
+                MarketOpportunityEvent.moe_status == "detected",
+                MarketOpportunityEvent.moe_ast_id.in_(
+                    assets_with_active_strategists
+                ),
+            )
             .order_by(MarketOpportunityEvent.moe_detected_at)
             .with_for_update(skip_locked=True)
             .limit(1)

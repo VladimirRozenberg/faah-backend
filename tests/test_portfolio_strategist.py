@@ -1,10 +1,31 @@
+import os
 import unittest
+from uuid import uuid4
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from live_market.market_schemas import LiveQuote
-from models import Analysis, PortfolioRecommendation, PortfolioStrategistAttempt, Prompt
+from models import (
+    Analysis,
+    Asset,
+    AssetNiche,
+    MarketOpportunityEvent,
+    Niche,
+    Portfolio,
+    PortfolioAsset,
+    PortfolioAssetTypePreference,
+    PortfolioNichePreference,
+    PortfolioRecommendation,
+    PortfolioStrategist,
+    PortfolioStrategistAttempt,
+    PortfolioStrategistRun,
+    PortfolioStrategistRunSignal,
+    Prompt,
+    Signal,
+    User,
+)
 from portfolio_strategist.brain import build_strategist_model_input
 from portfolio_strategist.brain import validate_strategist_coverage
 from portfolio_strategist.brain import parse_strategist_decision
@@ -23,6 +44,18 @@ from portfolio_strategist.schemas import (
 )
 from prompt.response_models import FinancialAnalysisResult
 from routers.portfolios import get_user_opportunities
+from sqlalchemy import func, select, text
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.compiler import compiles
+
+from db import Base
+from portfolio_strategist.repository import StrategistRepository
+
+
+@compiles(JSONB, "sqlite")
+def compile_jsonb_for_sqlite(type_, compiler, **kwargs):
+    return "JSON"
 
 
 class OpportunityDetectorTests(unittest.TestCase):
@@ -81,6 +114,229 @@ class OpportunityDetectorTests(unittest.TestCase):
         )
         self.assertEqual(result.anl_risk_level, "high")
         self.assertEqual(result.anl_timeframe, "multiple")
+
+
+class StrategistSignalBatchingTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        test_database_url = os.getenv("FAAH_TEST_DATABASE_URL")
+        self.schema_name = f"strategist_test_{uuid4().hex}"
+        self.admin_engine = None
+        if test_database_url:
+            self.admin_engine = create_async_engine(test_database_url)
+            async with self.admin_engine.begin() as connection:
+                await connection.execute(
+                    text(f'CREATE SCHEMA "{self.schema_name}"')
+                )
+            self.engine = create_async_engine(
+                test_database_url,
+                connect_args={
+                    "server_settings": {"search_path": self.schema_name}
+                },
+            )
+        else:
+            self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        models = [
+            User,
+            Asset,
+            Niche,
+            AssetNiche,
+            Portfolio,
+            PortfolioAssetTypePreference,
+            PortfolioNichePreference,
+            PortfolioAsset,
+            Analysis,
+            MarketOpportunityEvent,
+            Signal,
+            PortfolioStrategist,
+            PortfolioStrategistRun,
+            PortfolioStrategistRunSignal,
+            Prompt,
+        ]
+        async with self.engine.begin() as connection:
+            def create_test_tables(sync_connection):
+                if sync_connection.dialect.name == "postgresql":
+                    Base.metadata.create_all(sync_connection)
+                else:
+                    Base.metadata.create_all(
+                        sync_connection,
+                        tables=[model.__table__ for model in models],
+                    )
+
+            await connection.run_sync(create_test_tables)
+        self.session_factory = async_sessionmaker(
+            self.engine,
+            expire_on_commit=False,
+        )
+
+    async def asyncTearDown(self):
+        await self.engine.dispose()
+        if self.admin_engine is not None:
+            async with self.admin_engine.begin() as connection:
+                await connection.execute(
+                    text(f'DROP SCHEMA "{self.schema_name}" CASCADE')
+                )
+            await self.admin_engine.dispose()
+
+    async def test_dispatch_batches_signals_once_per_portfolio(self):
+        async with self.session_factory() as session:
+            user = User(
+                usr_username="batch-user",
+                usr_email="batch@example.com",
+                usr_password_hash="not-used-in-this-test",
+                usr_balance=Decimal("10000"),
+            )
+            session.add(user)
+            await session.flush()
+            portfolio = Portfolio(
+                prt_usr_id=user.usr_id,
+                prt_name="Batch portfolio",
+            )
+            assets = [
+                Asset(ast_symbol="AAA", ast_name="Asset A", ast_type="stock"),
+                Asset(ast_symbol="BBB", ast_name="Asset B", ast_type="stock"),
+            ]
+            session.add_all([portfolio, *assets])
+            await session.flush()
+            session.add_all(
+                [
+                    PortfolioAsset(
+                        pas_prt_id=portfolio.prt_id,
+                        pas_ast_id=asset.ast_id,
+                        pas_quantity=1,
+                        pas_average_purchase_price=10,
+                        pas_is_active=True,
+                    )
+                    for asset in assets
+                ]
+            )
+            prompt = Prompt(
+                prm_name="Batch test prompt",
+                prm_type="test",
+                prm_prompt_text="Test prompt",
+            )
+            session.add(prompt)
+            await session.flush()
+            analyses = [
+                Analysis(
+                    anl_prm_id=prompt.prm_id,
+                    anl_trigger_type="test",
+                    anl_response_text="Test analysis",
+                )
+                for _ in assets
+            ]
+            session.add_all(analyses)
+            await session.flush()
+            strategist = PortfolioStrategist(pst_prt_id=portfolio.prt_id)
+            session.add(strategist)
+            session.add_all(
+                [
+                    Signal(
+                        sig_anl_id=analysis.anl_id,
+                        sig_ast_id=asset.ast_id,
+                        sig_action="buy",
+                        sig_confidence=70,
+                        sig_status="active",
+                    )
+                    for analysis, asset in zip(analyses, assets)
+                ]
+            )
+            await session.commit()
+
+            queued = await StrategistRepository(session).dispatch_new_signals()
+            self.assertEqual(queued, 1)
+            self.assertEqual(
+                await session.scalar(select(func.count(PortfolioStrategistRun.psr_id))),
+                1,
+            )
+            self.assertEqual(
+                set(
+                    (
+                        await session.scalars(
+                            select(PortfolioStrategistRunSignal.psrs_sig_id)
+                        )
+                    ).all()
+                ),
+                {signal.sig_id for signal in (await session.scalars(select(Signal))).all()},
+            )
+            self.assertEqual(
+                await StrategistRepository(session).dispatch_new_signals(),
+                0,
+            )
+
+    async def test_inactive_portfolio_does_not_receive_or_run_price_reviews(self):
+        async with self.session_factory() as session:
+            user = User(
+                usr_username="inactive-batch-user",
+                usr_email="inactive-batch@example.com",
+                usr_password_hash="not-used-in-this-test",
+            )
+            session.add(user)
+            await session.flush()
+            portfolio = Portfolio(
+                prt_usr_id=user.usr_id,
+                prt_name="Inactive portfolio",
+                prt_is_active=False,
+            )
+            session.add(portfolio)
+            asset = Asset(
+                ast_symbol="CCC",
+                ast_name="Asset C",
+                ast_type="stock",
+            )
+            session.add(asset)
+            await session.flush()
+            strategist = PortfolioStrategist(pst_prt_id=portfolio.prt_id)
+            event = MarketOpportunityEvent(
+                moe_ast_id=asset.ast_id,
+                moe_event_type="price_rise",
+                moe_price_before=Decimal("10"),
+                moe_price_after=Decimal("11"),
+                moe_change_pct=Decimal("10"),
+                moe_window_seconds=60,
+                moe_reason="Test price event",
+                moe_status="analyzed",
+            )
+            detected_event = MarketOpportunityEvent(
+                moe_ast_id=asset.ast_id,
+                moe_event_type="price_drop",
+                moe_price_before=Decimal("11"),
+                moe_price_after=Decimal("10"),
+                moe_change_pct=Decimal("-9.09"),
+                moe_window_seconds=60,
+                moe_reason="Unclaimed inactive price event",
+                moe_status="detected",
+            )
+            session.add_all(
+                [
+                    strategist,
+                    PortfolioAsset(
+                        pas_prt_id=portfolio.prt_id,
+                        pas_ast_id=asset.ast_id,
+                        pas_quantity=1,
+                        pas_average_purchase_price=10,
+                        pas_is_active=True,
+                    ),
+                ]
+            )
+            await session.flush()
+            pending_run = PortfolioStrategistRun(
+                psr_pst_id=strategist.pst_id,
+                psr_review_type="targeted_price",
+                psr_status="pending",
+                psr_priority=4,
+                psr_reason="Previously queued test event",
+            )
+            session.add_all([event, detected_event, pending_run])
+            await session.commit()
+
+            repository = StrategistRepository(session)
+            self.assertEqual(await repository.dispatch_analyzed_events(), 0)
+            self.assertIsNone(await repository.claim_next_event())
+            self.assertIsNone(await repository.claim_next_run())
+            await session.refresh(pending_run)
+            self.assertEqual(pending_run.psr_status, "pending")
+            await session.refresh(detected_event)
+            self.assertEqual(detected_event.moe_status, "detected")
 
 
 class StrategistCoverageTests(unittest.TestCase):
@@ -148,6 +404,67 @@ class StrategistCoverageTests(unittest.TestCase):
                 targeted_reason="The signal does not materially fit the portfolio.",
             ),
         )
+
+    def test_batched_signals_validate_all_affected_holdings_and_references(self):
+        context = self.context("targeted_signal")
+        context.positions.append(
+            StrategistPosition(
+                asset_id=4,
+                symbol="AAPL",
+                name="Apple",
+                asset_type="stock",
+                quantity=2,
+                average_purchase_price=180,
+            )
+        )
+        context.triggering_signals = [
+            StrategistSignal(
+                signal_id=9,
+                analysis_id=12,
+                asset_id=3,
+                asset_symbol="GC=F",
+                action="sell",
+                created_at=datetime.now(timezone.utc),
+            ),
+            StrategistSignal(
+                signal_id=10,
+                analysis_id=13,
+                asset_id=4,
+                asset_symbol="AAPL",
+                action="buy",
+                created_at=datetime.now(timezone.utc),
+            ),
+        ]
+        decision = self.decision(
+            assessments=[
+                HoldingAssessment(
+                    asset_symbol="GC=F",
+                    verdict="watch",
+                    reason="Review the sell signal.",
+                ),
+                HoldingAssessment(
+                    asset_symbol="AAPL",
+                    verdict="good",
+                    reason="Review the buy signal.",
+                ),
+            ],
+            opportunities=[
+                StrategistOpportunity(
+                    asset_symbol="AAPL",
+                    signal_id=10,
+                    reason="The signal supports the opportunity.",
+                    confidence=70,
+                )
+            ],
+            targeted_conclusion="watch",
+            targeted_reason="Review both signals together.",
+        )
+
+        validate_strategist_coverage(context, decision)
+
+        decision.holding_assessments.pop()
+        with self.assertRaisesRegex(ValueError, "omitted the affected holding"):
+            validate_strategist_coverage(context, decision)
 
     def test_strategist_cannot_invent_an_opportunity_asset(self):
         from portfolio_strategist.schemas import StrategistOpportunity

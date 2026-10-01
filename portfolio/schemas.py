@@ -55,6 +55,43 @@ class PortfolioCreateRequest(BaseModel):
         return values
 
 
+class PortfolioUpdateRequest(BaseModel):
+    """Partial portfolio configuration and active-state update."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2_000)
+    strategy_type: PortfolioStrategyType | None = None
+    preferred_asset_types: list[PortfolioAssetType] | None = Field(
+        default=None,
+        max_length=4,
+    )
+    preferred_niche_ids: list[int] | None = Field(default=None, max_length=100)
+    risk_tolerance: Literal["low", "medium", "high"] | None = None
+    max_position_size_pct: float | None = Field(default=None, gt=0, le=100)
+    max_open_positions: int | None = Field(default=None, ge=1, le=1_000)
+    base_currency: Literal["USD"] | None = None
+    is_active: bool | None = None
+
+    @field_validator("preferred_asset_types", "preferred_niche_ids")
+    @classmethod
+    def preferences_must_be_unique(cls, values: list | None) -> list | None:
+        if values is not None and len(values) != len(set(values)):
+            raise ValueError("Portfolio preferences cannot contain duplicates.")
+        return values
+
+    @field_validator("preferred_niche_ids")
+    @classmethod
+    def niche_ids_must_be_positive(
+        cls,
+        values: list[int] | None,
+    ) -> list[int] | None:
+        if values is not None and any(value <= 0 for value in values):
+            raise ValueError("Preferred niche IDs must be positive.")
+        return values
+
+
 class BuyAssetRequest(BaseModel):
     """Achat simulé envoyé par Avalonia."""
 

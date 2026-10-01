@@ -27,6 +27,7 @@ from models import (
     PortfolioStrategist,
     PortfolioStrategistAttempt,
     PortfolioStrategistRun,
+    PortfolioStrategistRunSignal,
     Signal,
 )
 from live_market.redis_client import get_latest_quote
@@ -461,21 +462,40 @@ class StrategistReviewExecutor:
             )
 
         triggering_signal = None
+        triggering_signals = []
         source_analysis_ids: set[int] = set()
+        batched_signal_ids = select(
+            PortfolioStrategistRunSignal.psrs_sig_id
+        ).where(PortfolioStrategistRunSignal.psrs_psr_id == run.psr_id)
+        signal_filter = Signal.sig_id.in_(batched_signal_ids)
         if run.psr_sig_id is not None:
-            signal_row = (
+            signal_filter = or_(signal_filter, Signal.sig_id == run.psr_sig_id)
+        signal_rows = list(
+            (
                 await self.repository.session.execute(
                     select(Signal, Analysis, Asset)
                     .join(Analysis, Analysis.anl_id == Signal.sig_anl_id)
                     .join(Asset, Asset.ast_id == Signal.sig_ast_id)
-                    .where(Signal.sig_id == run.psr_sig_id)
+                    .where(signal_filter)
+                    .order_by(Signal.sig_id)
                 )
-            ).one_or_none()
-            if signal_row is None:
-                raise LookupError(f"Triggering signal disappeared: {run.psr_sig_id}")
-            signal, analysis, asset = signal_row
-            triggering_signal = self._signal_schema(signal, analysis, asset)
-            source_analysis_ids.add(analysis.anl_id)
+            ).all()
+        )
+        if run.psr_sig_id is not None and not signal_rows:
+            raise LookupError(f"Triggering signal disappeared: {run.psr_sig_id}")
+        triggering_signals = [
+            self._signal_schema(signal, analysis, asset)
+            for signal, analysis, asset in signal_rows
+        ]
+        triggering_signal = next(
+            (
+                signal
+                for signal in triggering_signals
+                if signal.signal_id == run.psr_sig_id
+            ),
+            triggering_signals[0] if triggering_signals else None,
+        )
+        source_analysis_ids.update(analysis.anl_id for _, analysis, _ in signal_rows)
 
         triggering_event = None
         if run.psr_moe_id is not None:
@@ -596,6 +616,7 @@ class StrategistReviewExecutor:
             relevant_ids |= candidate_ids
         if triggering_signal is not None:
             relevant_ids.add(triggering_signal.asset_id)
+        relevant_ids.update(signal.asset_id for signal in triggering_signals)
         if triggering_event is not None:
             relevant_ids.add(int(triggering_event["asset_id"]))
 
@@ -760,6 +781,7 @@ class StrategistReviewExecutor:
             instructions=strategist.pst_instructions,
             positions=positions,
             triggering_signal=triggering_signal,
+            triggering_signals=triggering_signals,
             triggering_market_event=triggering_event,
             recent_signals=recent_signals,
             analyses=analyses,
@@ -958,7 +980,19 @@ class StrategistReviewExecutor:
         if decision.get("targeted_conclusion") and decision.get("targeted_reason"):
             targeted_symbol = None
             targeted_asset_id = run.psr_ast_id
-            if context.triggering_signal is not None:
+            triggering_signals = context.triggering_signals or (
+                [context.triggering_signal]
+                if context.triggering_signal is not None
+                else []
+            )
+            triggering_asset_ids = {signal.asset_id for signal in triggering_signals}
+            if len(triggering_asset_ids) == 1:
+                targeted_asset_id = next(iter(triggering_asset_ids))
+                targeted_symbol = next(
+                    signal.asset_symbol.strip().upper()
+                    for signal in triggering_signals
+                )
+            elif not triggering_signals and context.triggering_signal is not None:
                 targeted_symbol = context.triggering_signal.asset_symbol.strip().upper()
                 targeted_asset_id = context.triggering_signal.asset_id
             elif targeted_asset_id is not None:
@@ -977,7 +1011,9 @@ class StrategistReviewExecutor:
                     prc_psr_id=run.psr_id,
                     prc_prt_id=portfolio_id,
                     prc_ast_id=targeted_asset_id,
-                    prc_sig_id=run.psr_sig_id,
+                    prc_sig_id=(
+                        run.psr_sig_id if len(triggering_signals) <= 1 else None
+                    ),
                     prc_kind="targeted_conclusion",
                     prc_asset_symbol=targeted_symbol,
                     prc_action=decision["targeted_conclusion"],

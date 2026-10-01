@@ -1268,6 +1268,21 @@ class PortfolioStrategistRun(Base):
     psr_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class PortfolioStrategistRunSignal(Base):
+    """Signal evidence included in a batched strategist run."""
+
+    __tablename__ = "portfolio_strategist_run_signals"
+
+    psrs_psr_id: Mapped[int] = mapped_column(
+        ForeignKey("portfolio_strategist_runs.psr_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    psrs_sig_id: Mapped[int] = mapped_column(
+        ForeignKey("signals.sig_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+
 class PortfolioStrategistAttempt(Base):
     """One durable prompt/provider attempt for a strategist run."""
 

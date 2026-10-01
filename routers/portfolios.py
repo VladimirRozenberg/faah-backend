@@ -24,12 +24,14 @@ from portfolio.repository import (
     read_user_asset_value,
     read_user_portfolio,
     sell_asset,
+    update_user_portfolio,
 )
 from portfolio.schemas import (
     BuyAssetRequest,
     PortfolioCreateRequest,
     PortfolioResponse,
     PortfolioSummaryListResponse,
+    PortfolioUpdateRequest,
     SellAssetRequest,
     TransactionListResponse,
     UserAvailableCashResponse,
@@ -471,6 +473,24 @@ async def create_portfolio(
 
     try:
         return await create_user_portfolio(db, user_id, data)
+    except (LookupError, ValueError) as error:
+        raise create_http_error(error) from error
+
+
+@router.patch(
+    "/users/{user_id}/portfolios/{portfolio_id}",
+    response_model=PortfolioResponse,
+)
+async def update_portfolio(
+    user_id: int,
+    portfolio_id: int,
+    data: PortfolioUpdateRequest,
+    db: DbSession,
+) -> PortfolioResponse:
+    """Update an owned portfolio, including its active state."""
+
+    try:
+        return await update_user_portfolio(db, user_id, portfolio_id, data)
     except (LookupError, ValueError) as error:
         raise create_http_error(error) from error
 
