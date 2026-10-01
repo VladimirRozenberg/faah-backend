@@ -3,7 +3,6 @@
 from fastapi import APIRouter
 from sqlalchemy import select
 
-from auth.login import CurrentUser
 from db import DbSession
 from models import Niche
 
@@ -11,7 +10,7 @@ router = APIRouter(prefix="/api", tags=["Niches"])
 
 
 @router.get("/niches", summary="Afficher les niches enregistrées")
-async def list_niches(db: DbSession, user: CurrentUser) -> dict:
+async def list_niches(db: DbSession) -> dict:
     """Retourne toutes les niches, triées par identifiant, sans modifier la base."""
     result = await db.execute(
         select(
