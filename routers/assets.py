@@ -163,8 +163,9 @@ async def list_assets(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     search: str = Query(default="", max_length=200),
+    favorites_only: bool = False,
 ) -> AssetListResponse:
-    """Recherche par symbole ou nom sur toute la base, puis applique la pagination."""
+    """Filtre par recherche et favoris de l'utilisateur avant la pagination."""
 
     filters = []
     term = search.strip()
@@ -173,13 +174,15 @@ async def list_assets(
         pattern = "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         filters.append(or_(Asset.ast_symbol.ilike(pattern, escape="\\"), Asset.ast_name.ilike(pattern, escape="\\")))
 
-    total = await db.scalar(
-        select(func.count()).select_from(Asset).where(*filters)
-    ) or 0
-
     favorite_asset_ids = select(Favorite.fav_ast_id).where(
         Favorite.fav_usr_id == user.user_id
     )
+    if favorites_only:
+        filters.append(Asset.ast_id.in_(favorite_asset_ids))
+
+    total = await db.scalar(
+        select(func.count()).select_from(Asset).where(*filters)
+    ) or 0
 
     favorite_order = case(
         (Asset.ast_id.in_(favorite_asset_ids), 0),

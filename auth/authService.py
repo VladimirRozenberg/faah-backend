@@ -5,7 +5,7 @@ import time
 
 import bcrypt
 import jwt
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 
 import models
@@ -63,9 +63,15 @@ class AuthService:
         return UserResponse(user_id=user.usr_id, username=user.usr_username, role=user.usr_role, email=user.usr_email, is_active=user.usr_is_active, balance=float(user.usr_balance), created_at=user.usr_created_at)
 
     async def login(self, username: str, password: str, db) -> TokenResponse:
-        """Vérifie les identifiants et retourne un token d'accès."""
+        """Connecte par nom d'utilisateur ou email et retourne un token d'accès."""
 
-        query = select(models.User).where(models.User.usr_username == username.lower())
+        identifier = username.strip().lower()
+        query = select(models.User).where(
+            or_(
+                models.User.usr_username == identifier,
+                models.User.usr_email == identifier,
+            )
+        )
         result = await db.execute(query)
         user = result.scalar_one_or_none()
 

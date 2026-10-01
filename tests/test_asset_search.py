@@ -42,5 +42,32 @@ class AssetSearchTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(empty.items, [])
                     all_assets = await list_assets(db, user, page=1, page_size=20, search="   ")
                     self.assertEqual(all_assets.count, 4)
+                    assets_by_symbol = {a.symbol: a.id for a in all_assets.items}
+                    db.add_all([
+                        Favorite(fav_usr_id=1, fav_ast_id=assets_by_symbol["AAPL"]),
+                        Favorite(fav_usr_id=1, fav_ast_id=assets_by_symbol["APLE"]),
+                        Favorite(fav_usr_id=2, fav_ast_id=assets_by_symbol["HWM"]),
+                    ])
+                    await db.commit()
+                    favorites_first = await list_assets(db, user, page=1, page_size=1, search="apple", favorites_only=True)
+                    favorites_second = await list_assets(db, user, page=2, page_size=1, search="apple", favorites_only=True)
+                    self.assertEqual(favorites_first.count, 2)
+                    self.assertEqual(favorites_second.count, 2)
+                    self.assertEqual(len(favorites_first.items), 1)
+                    self.assertEqual(len(favorites_second.items), 1)
+                    self.assertNotEqual(favorites_first.items[0].id, favorites_second.items[0].id)
+                    favorites = await list_assets(db, user, page=1, page_size=20, search="", favorites_only=True)
+                    self.assertEqual(favorites.count, 2)
+                    self.assertEqual({a.symbol for a in favorites.items}, {"AAPL", "APLE"})
+                    other_user = await list_assets(db, SimpleNamespace(user_id=2), page=1, page_size=20, search="", favorites_only=True)
+                    self.assertEqual([a.symbol for a in other_user.items], ["HWM"])
+                    no_favorites = await list_assets(db, SimpleNamespace(user_id=3), page=1, page_size=20, search="", favorites_only=True)
+                    self.assertEqual(no_favorites.count, 0)
+                    self.assertEqual(no_favorites.items, [])
+                    unmatched = await list_assets(db, user, page=1, page_size=20, search="hwm", favorites_only=True)
+                    self.assertEqual(unmatched.count, 0)
+                    self.assertEqual(unmatched.items, [])
+                    unfiltered = await list_assets(db, user, page=1, page_size=20, search="", favorites_only=False)
+                    self.assertEqual(unfiltered.count, 4)
         finally:
             await engine.dispose()
