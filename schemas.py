@@ -33,6 +33,16 @@ class DatabaseHealth(BaseModel):
     error: str | None = None
 
 
+class LiveMarketWorkerHealth(BaseModel):
+    status: str
+    healthy: bool
+    running: bool
+    connected: bool
+    subscribed_assets: int = 0
+    last_heartbeat_at: datetime | None = None
+    error: str | None = None
+
+
 class OrchestratorHealth(BaseModel):
     status: str
     enabled: bool
@@ -96,6 +106,7 @@ class HealthResponse(BaseModel):
     status: str = Field(examples=["ok", "degraded"])
     checked_at: datetime
     database: DatabaseHealth
+    live_market_worker: LiveMarketWorkerHealth
     orchestrator: OrchestratorHealth
     portfolio_strategists: PortfolioStrategistsHealth
     rss_feeds: RSSFeedsHealth
@@ -139,4 +150,3 @@ class UserResponse(BaseModel):
     email: str 
     is_active : bool 
     created_at : datetime
-

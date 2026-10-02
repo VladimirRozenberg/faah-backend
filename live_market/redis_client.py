@@ -3,11 +3,13 @@
 from redis.asyncio import Redis
 
 from live_market.config import CACHE_TTL_SECONDS, REDIS_URL
-from live_market.market_schemas import LiveQuote
+from live_market.market_schemas import LiveQuote, LiveWorkerStatus
 
 
 # decode_responses permet de lire du texte plutôt que des octets.
 redis_client = Redis.from_url(REDIS_URL, decode_responses=True)
+LIVE_WORKER_STATUS_KEY = "market:worker:status"
+LIVE_WORKER_STATUS_TTL_SECONDS = 60
 
 
 async def save_latest_quote(quote: LiveQuote) -> None:
@@ -30,6 +32,25 @@ async def get_latest_quote(symbol: str) -> LiveQuote | None:
 
     # Reconstruire le cours à partir du JSON et vérifier ses types.
     return LiveQuote.model_validate_json(data)
+
+
+async def save_live_worker_status(status: LiveWorkerStatus) -> None:
+    """Publish a worker heartbeat that expires if the worker stops reporting."""
+
+    await redis_client.set(
+        LIVE_WORKER_STATUS_KEY,
+        status.model_dump_json(),
+        ex=LIVE_WORKER_STATUS_TTL_SECONDS,
+    )
+
+
+async def get_live_worker_status() -> LiveWorkerStatus | None:
+    """Read the worker heartbeat, or None when no live heartbeat exists."""
+
+    data = await redis_client.get(LIVE_WORKER_STATUS_KEY)
+    if data is None:
+        return None
+    return LiveWorkerStatus.model_validate_json(data)
 
 
 async def save_opportunity_sample(quote: LiveQuote) -> None:

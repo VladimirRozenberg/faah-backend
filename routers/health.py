@@ -8,6 +8,10 @@ from sqlalchemy import func, select, text
 
 from db import DbSession
 from external_health import get_external_health
+from live_market.redis_client import (
+    LIVE_WORKER_STATUS_TTL_SECONDS,
+    get_live_worker_status,
+)
 from models import (
     OrchestratorAnalysisJob,
     PortfolioStrategist,
@@ -19,6 +23,7 @@ from orchestrator_agent.memory import JsonMemoryStore
 from schemas import (
     DatabaseHealth,
     HealthResponse,
+    LiveMarketWorkerHealth,
     OrchestratorHealth,
     PortfolioStrategistHealth,
     PortfolioStrategistsHealth,
@@ -58,6 +63,55 @@ async def health(request: Request, db: DbSession) -> HealthResponse:
     """Report API dependencies, worker liveness, queues, and schedules."""
 
     checked_at = datetime.now(timezone.utc)
+    try:
+        worker_snapshot = await get_live_worker_status()
+        if worker_snapshot is None:
+            live_market_worker = LiveMarketWorkerHealth(
+                status="down",
+                healthy=False,
+                running=False,
+                connected=False,
+                error="No live market worker heartbeat in Redis",
+            )
+        else:
+            heartbeat_is_fresh = (
+                checked_at - worker_snapshot.last_heartbeat_at
+            ).total_seconds() <= LIVE_WORKER_STATUS_TTL_SECONDS
+            worker_running = worker_snapshot.running and heartbeat_is_fresh
+            worker_healthy = (
+                worker_running
+                and worker_snapshot.connected
+                and worker_snapshot.error is None
+            )
+            live_market_worker = LiveMarketWorkerHealth(
+                status=(
+                    "running"
+                    if worker_healthy
+                    else "degraded"
+                    if worker_running
+                    else "down"
+                ),
+                healthy=worker_healthy,
+                running=worker_running,
+                connected=worker_snapshot.connected,
+                subscribed_assets=worker_snapshot.subscribed_assets,
+                last_heartbeat_at=worker_snapshot.last_heartbeat_at,
+                error=worker_snapshot.error
+                or (
+                    None
+                    if worker_healthy
+                    else "Worker heartbeat is stale or websocket is disconnected"
+                ),
+            )
+    except Exception as exc:
+        live_market_worker = LiveMarketWorkerHealth(
+            status="unavailable",
+            healthy=False,
+            running=False,
+            connected=False,
+            error=f"Worker status unavailable ({type(exc).__name__})",
+        )
+
     orchestrator_enabled = _configured("RUN_ORCHESTRATOR")
     strategists_enabled = _configured("RUN_STRATEGISTS")
     orchestrator_running = _task_running(request, "faah-orchestrator")
@@ -271,11 +325,19 @@ async def health(request: Request, db: DbSession) -> HealthResponse:
         items=feed_items,
         error=database.error,
     )
-    components = (orchestrator, portfolio_strategists, rss_feeds)
+    components = (
+        live_market_worker,
+        orchestrator,
+        portfolio_strategists,
+        rss_feeds,
+    )
     overall_status = (
         "ok"
         if database.connected
-        and all(item.status not in {"down", "degraded"} for item in components)
+        and all(
+            item.status not in {"down", "degraded", "unavailable"}
+            for item in components
+        )
         else "degraded"
     )
 
@@ -283,6 +345,7 @@ async def health(request: Request, db: DbSession) -> HealthResponse:
         status=overall_status,
         checked_at=checked_at,
         database=database,
+        live_market_worker=live_market_worker,
         orchestrator=orchestrator,
         portfolio_strategists=portfolio_strategists,
         rss_feeds=rss_feeds,
