@@ -31,6 +31,8 @@ from assets.schemas import (
 
 from auth.login import CurrentUser
 from db import DbSession
+from live_market.market_schemas import LiveQuote
+from live_market.redis_client import get_latest_quote
 from models import (
     Asset,
     AssetNiche,
@@ -129,22 +131,51 @@ async def add_market_information(
     assets: list[Asset],
     items: list[AssetListItem],
 ) -> None:
-    """Attach one batched market lookup without hiding database assets on failure."""
+    """Attach cached live quotes without hiding database assets on cache misses."""
 
     if not assets:
         return
-    try:
-        summaries = await asyncio.to_thread(get_market_assets, assets)
-    except Exception:
-        logger.exception(
-            "Market information unavailable for %d asset(s)",
-            len(assets),
-        )
-        return
 
-    summaries_by_symbol = {summary.symbol: summary for summary in summaries}
+    async def read_quote(symbol: str) -> LiveQuote | None:
+        try:
+            return await get_latest_quote(symbol)
+        except Exception:
+            logger.exception("Cached market quote unavailable for %s", symbol)
+            return None
+
+    quotes = await asyncio.gather(
+        *(read_quote(asset.ast_symbol) for asset in assets)
+    )
+    quotes_by_symbol = {
+        quote.symbol: quote for quote in quotes if quote is not None
+    }
+    assets_by_symbol = {asset.ast_symbol: asset for asset in assets}
+
     for item in items:
-        item.market = summaries_by_symbol.get(item.symbol)
+        cached_quote = quotes_by_symbol.get(item.symbol)
+        if cached_quote is None:
+            continue
+
+        asset = assets_by_symbol[item.symbol]
+        item.market = AssetSummary(
+            symbol=cached_quote.symbol,
+            name=asset.ast_name,
+            type=asset.ast_type,
+            logo_url=(
+                f"/api/assets/{quote(asset.ast_symbol, safe='')}/logo"
+                if asset.ast_logo_mime_type
+                else None
+            ),
+            exchange=asset.ast_exchange,
+            currency=asset.ast_currency or "USD",
+            last_price=cached_quote.price,
+            previous_close=None,
+            change=None,
+            change_percent=None,
+            volume=cached_quote.day_volume,
+            retrieved_at=cached_quote.timestamp,
+            source="Redis live quote",
+        )
 
 
 def create_http_error(error: Exception) -> HTTPException:

@@ -3,8 +3,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from assets.market_data import MarketDataUnavailableError
-from assets.schemas import AssetSummary
+from live_market.market_schemas import LiveQuote
 from routers.assets import list_assets
 
 
@@ -36,24 +35,17 @@ class AssetMarketIntegrationTests(unittest.IsolatedAsyncioTestCase):
             get=AsyncMock(return_value=None),
         )
         user = SimpleNamespace(user_id=3)
-        summary = AssetSummary(
+        quote = LiveQuote(
             symbol="AAPL",
-            name="Apple",
-            type="stock",
-            exchange="NASDAQ",
-            currency="USD",
-            last_price=230.0,
-            previous_close=228.0,
-            change=2.0,
-            change_percent=0.8772,
-            volume=1_000,
-            retrieved_at=datetime(2026, 9, 25, tzinfo=timezone.utc),
+            price=230.0,
+            timestamp=datetime(2026, 9, 25, tzinfo=timezone.utc),
+            day_volume=1_000,
         )
 
         with patch(
-            "routers.assets.get_market_assets",
-            return_value=[summary],
-        ) as market:
+            "routers.assets.get_latest_quote",
+            new=AsyncMock(return_value=quote),
+        ) as cached_quote:
             response = await list_assets(
                 db,
                 user,
@@ -62,8 +54,11 @@ class AssetMarketIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 search="",
             )
 
-        market.assert_called_once_with([asset])
-        self.assertEqual(response.items[0].market, summary)
+        cached_quote.assert_awaited_once_with("AAPL")
+        self.assertEqual(response.items[0].market.last_price, quote.price)
+        self.assertEqual(response.items[0].market.retrieved_at, quote.timestamp)
+        self.assertIsNone(response.items[0].market.previous_close)
+        self.assertEqual(response.items[0].market.source, "Redis live quote")
 
     async def test_asset_list_survives_market_provider_failure(self):
         asset = database_asset()
@@ -76,8 +71,8 @@ class AssetMarketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         user = SimpleNamespace(user_id=3)
 
         with patch(
-            "routers.assets.get_market_assets",
-            side_effect=MarketDataUnavailableError("Yahoo unavailable"),
+            "routers.assets.get_latest_quote",
+            new=AsyncMock(side_effect=RuntimeError("Redis unavailable")),
         ):
             response = await list_assets(
                 db,

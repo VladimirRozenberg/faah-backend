@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from assets.schemas import AssetSummary
 from db import Base
+from live_market.market_schemas import LiveQuote
 from models import Asset, AssetNiche, Favorite, Forex, Niche, Stock, User
 from routers.assets import list_assets, router
 
@@ -34,21 +34,19 @@ class AssetSearchTests(unittest.IsolatedAsyncioTestCase):
                 ])
                 await db.commit()
                 user = SimpleNamespace(user_id=1)
-                market_summary = AssetSummary(
+                market_quote = LiveQuote(
                     symbol="AAPL",
-                    name="Apple Inc.",
-                    type="stock",
-                    currency="USD",
-                    last_price=201.5,
-                    previous_close=200.0,
-                    change=1.5,
-                    change_percent=0.75,
-                    volume=1_000_000,
-                    retrieved_at=datetime.now(timezone.utc),
+                    price=201.5,
+                    timestamp=datetime.now(timezone.utc),
+                    day_volume=1_000_000,
                 )
+
+                async def get_quote(symbol):
+                    return market_quote if symbol == "AAPL" else None
+
                 with patch(
-                    "routers.assets.get_market_assets",
-                    return_value=[market_summary],
+                    "routers.assets.get_latest_quote",
+                    side_effect=get_quote,
                 ):
                     first = await list_assets(db, user, page=1, page_size=1, search="  APPLE  ")
                     second = await list_assets(db, user, page=2, page_size=1, search="apple")
@@ -57,7 +55,9 @@ class AssetSearchTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(len(first.items), 1)
                     self.assertNotEqual(first.items[0].id, second.items[0].id)
                     apple = await list_assets(db, user, page=1, page_size=20, search="AAPL")
-                    self.assertEqual(apple.items[0].market, market_summary)
+                    self.assertEqual(apple.items[0].market.last_price, 201.5)
+                    self.assertEqual(apple.items[0].market.previous_close, None)
+                    self.assertEqual(apple.items[0].market.source, "Redis live quote")
                     by_symbol = await list_assets(db, user, page=1, page_size=20, search="hwm")
                     self.assertEqual([a.symbol for a in by_symbol.items], ["HWM"])
                     literal = await list_assets(db, user, page=1, page_size=20, search="%_")
@@ -161,7 +161,10 @@ class AssetSearchTests(unittest.IsolatedAsyncioTestCase):
                 )
                 await db.commit()
 
-                with patch("routers.assets.get_market_assets", return_value=[]):
+                with patch(
+                    "routers.assets.get_latest_quote",
+                    new=AsyncMock(return_value=None),
+                ):
                     # Une saisie incomplète fonctionne aussi sur les pages suivantes.
                     partial = await list_assets(
                         db, SimpleNamespace(user_id=1), page=2, page_size=1,
