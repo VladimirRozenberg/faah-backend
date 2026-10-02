@@ -20,6 +20,7 @@ from models import (
     Niche,
     Portfolio,
     Prompt,
+    RSSFeed,
     Signal,
     SourceClassification,
 )
@@ -48,6 +49,7 @@ async def list_data_sources(
     page_size: int = Query(default=20, ge=1, le=100),
     q: str | None = Query(default=None, min_length=1, max_length=200),
     source_type: str | None = Query(default=None, min_length=1, max_length=100),
+    rss_feed: str | None = Query(default=None, min_length=1, max_length=200),
     is_processed: bool | None = Query(default=None),
     published_from: datetime | None = Query(default=None),
     published_to: datetime | None = Query(default=None),
@@ -94,6 +96,18 @@ async def list_data_sources(
     if source_type is not None and source_type.strip():
         conditions.append(
             func.lower(DataSource.src_type) == source_type.strip().lower()
+        )
+    if rss_feed is not None and rss_feed.strip():
+        feed_name = rss_feed.strip().lower()
+        conditions.append(
+            select(1)
+            .select_from(RSSFeed)
+            .where(
+                func.lower(RSSFeed.rsf_name) == feed_name,
+                DataSource.src_type
+                == RSSFeed.rsf_source_prefix + ":" + RSSFeed.rsf_name,
+            )
+            .exists()
         )
     if is_processed is not None:
         conditions.append(DataSource.src_is_processed.is_(is_processed))

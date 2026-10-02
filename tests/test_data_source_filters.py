@@ -13,6 +13,7 @@ from models import (
     DataSource,
     Niche,
     Prompt,
+    RSSFeed,
     SourceClassification,
 )
 from routers.data_sources import router
@@ -28,6 +29,7 @@ class DataSourceFilterTests(unittest.IsolatedAsyncioTestCase):
                 Niche,
                 Prompt,
                 DataSource,
+                RSSFeed,
                 SourceClassification,
                 ClassificationAsset,
                 ClassificationNiche,
@@ -56,6 +58,16 @@ class DataSourceFilterTests(unittest.IsolatedAsyncioTestCase):
                     nic_category="technology",
                     nic_description="AI businesses",
                 )
+                technology_feed = RSSFeed(
+                    rsf_name="Technology",
+                    rsf_url="https://example.com/technology.xml",
+                    rsf_source_prefix="rss",
+                )
+                markets_feed = RSSFeed(
+                    rsf_name="Markets",
+                    rsf_url="https://example.com/markets.xml",
+                    rsf_source_prefix="rss",
+                )
                 technology = DataSource(
                     src_type="rss:Technology",
                     src_title="Nvidia launches a new AI chip",
@@ -81,7 +93,17 @@ class DataSourceFilterTests(unittest.IsolatedAsyncioTestCase):
                     src_is_processed=False,
                 )
                 db.add_all(
-                    [prompt, nvda, apple, ai, technology, markets, pending]
+                    [
+                        prompt,
+                        nvda,
+                        apple,
+                        ai,
+                        technology_feed,
+                        markets_feed,
+                        technology,
+                        markets,
+                        pending,
+                    ]
                 )
                 await db.flush()
 
@@ -137,6 +159,7 @@ class DataSourceFilterTests(unittest.IsolatedAsyncioTestCase):
                         params={
                             "q": "nvidia",
                             "source_type": "RSS:TECHNOLOGY",
+                            "rss_feed": "tEcHnOlOgY",
                             "asset_symbol": "nvda",
                             "niche": "artificial intelligence",
                             "category": "TECHNOLOGY",
