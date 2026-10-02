@@ -44,9 +44,12 @@ class AssetSearchTests(unittest.IsolatedAsyncioTestCase):
                 async def get_quote(symbol):
                     return market_quote if symbol == "AAPL" else None
 
-                with patch(
-                    "routers.assets.get_latest_quote",
-                    side_effect=get_quote,
+                with (
+                    patch(
+                        "routers.assets.get_latest_quote",
+                        side_effect=get_quote,
+                    ),
+                    patch("routers.assets.get_market_assets", return_value=[]),
                 ):
                     first = await list_assets(db, user, page=1, page_size=1, search="  APPLE  ")
                     second = await list_assets(db, user, page=2, page_size=1, search="apple")
