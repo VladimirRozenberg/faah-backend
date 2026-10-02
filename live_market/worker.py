@@ -1,4 +1,4 @@
-"""Reçoit les cours Yahoo des actifs suivis et les transmet à Redis."""
+"""Reçoit les cours Yahoo de tous les actifs et les transmet à Redis."""
 
 import asyncio
 from datetime import datetime, timezone
@@ -12,11 +12,11 @@ from live_market.market_schemas import LiveQuote
 from models import Asset
 
 
-async def get_tracked_symbols() -> list[str]:
-    """Lit dans PostgreSQL les symboles que le worker doit suivre."""
+async def get_asset_symbols() -> list[str]:
+    """Lit dans PostgreSQL tous les symboles d'actifs à suivre."""
 
     async with AsyncSessionLocal() as db:
-        query = select(Asset.ast_symbol).where(Asset.ast_is_tracked.is_(True))
+        query = select(Asset.ast_symbol)
         symbols = await db.scalars(query)
         return list(symbols.all())
 
@@ -75,7 +75,7 @@ async def add_new_symbols(websocket, subscribed: set[str]) -> None:
         await asyncio.sleep(30)
 
         try:
-            database_symbols = set(await get_tracked_symbols())
+            database_symbols = set(await get_asset_symbols())
         except Exception as error:
             print(f"Impossible de relire les actifs : {error}")
             continue
@@ -125,7 +125,7 @@ async def listen_to_yfinance() -> None:
 
     while True:
         try:
-            symbols = await get_tracked_symbols()
+            symbols = await get_asset_symbols()
         except Exception:
             await asyncio.sleep(10)
             continue

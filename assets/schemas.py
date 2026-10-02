@@ -18,7 +18,7 @@ class DetectedAsset(BaseModel):
 
 
 class AssetSummary(BaseModel):
-    """Prix et variation d'un actif provenant de yfinance."""
+    """Latest market information for an asset."""
 
     symbol: str
     name: str
@@ -27,9 +27,9 @@ class AssetSummary(BaseModel):
     exchange: str | None = None
     currency: str
     last_price: float
-    previous_close: float
-    change: float
-    change_percent: float
+    previous_close: float | None = None
+    change: float | None = None
+    change_percent: float | None = None
     volume: int | None = None
     retrieved_at: datetime
     source: str = "Yahoo Finance via yfinance"
