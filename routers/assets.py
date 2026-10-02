@@ -27,6 +27,7 @@ from assets.schemas import (
     MarketListResponse,
     NicheItem,
     NicheListResponse,
+    UsdQuoteResponse,
 )
 
 from auth.login import CurrentUser
@@ -51,6 +52,19 @@ from models import (
 # sous le titre « Marché » dans la documentation Swagger.
 router = APIRouter(prefix="/api", tags=["Marché"])
 logger = logging.getLogger(__name__)
+
+
+@router.get("/assets/{symbol}/usd-quote", response_model=UsdQuoteResponse)
+async def asset_usd_quote(symbol: str, db: DbSession) -> UsdQuoteResponse:
+    # Le frontend affiche l'estimation ; le serveur recalcule lors de la confirmation.
+    from portfolio.repository import get_usd_quote
+    asset = await find_asset_or_404(db, symbol)
+    try:
+        quote = await get_usd_quote(asset)
+        quote["rate_date"] = quote["rate_date"].isoformat()
+        return UsdQuoteResponse(**quote)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 async def find_asset_or_404(db: DbSession, symbol: str) -> Asset:

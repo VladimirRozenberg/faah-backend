@@ -38,6 +38,7 @@ from portfolio.schemas import (
     UserAssetValueResponse,
     AssetTransactionSummary,
 )
+from portfolio.exchange_rates import get_usd_rate
 
 
 class AmbiguousPortfolioError(ValueError):
@@ -311,12 +312,8 @@ async def list_user_portfolios(
     return PortfolioSummaryListResponse(count=len(items), items=items)
 
 
-async def get_current_price(asset: Asset) -> float | None:
+async def get_native_price(asset: Asset) -> float | None:
     """Cherche le prix dans Redis, puis dans yfinance."""
-
-    if asset.ast_currency != "USD":
-        # No FX conversion is available: never label a foreign amount as USD.
-        return None
 
     try:
         quote = await get_latest_quote(asset.ast_symbol)
@@ -335,6 +332,40 @@ async def get_current_price(asset: Asset) -> float | None:
         return market_asset.last_price
     except Exception:
         # None signifie « prix inconnu », et non « prix égal à zéro ».
+        return None
+
+
+async def get_usd_quote(asset: Asset) -> dict:
+    """Prix d'origine et équivalent USD pour le ticket d'achat/vente."""
+    price = await get_native_price(asset)
+    if price is None:
+        raise ValueError("A quote is unavailable for this asset.")
+    original = Decimal(str(price))
+    if not original.is_finite() or original <= 0:
+        raise ValueError("Invalid quote for this asset.")
+    rate = await get_usd_rate(asset.ast_currency or "")
+    converted = original * rate.factor
+    if converted <= 0 or converted >= Decimal("10000000000"):
+        raise ValueError("Invalid USD quote for this asset.")
+    converted = converted.quantize(Decimal("0.00000001"))
+    if converted <= 0:
+        raise ValueError("The converted unit price is too small.")
+    return dict(
+        symbol=asset.ast_symbol,
+        original_currency=asset.ast_currency,
+        original_price=original,
+        price_usd=converted,
+        rate_to_usd=rate.factor,
+        rate_date=rate.rate_date,
+    )
+
+
+async def get_current_price(asset: Asset) -> float | None:
+    """Tous les calculs du portefeuille et les transactions sont en USD."""
+    try:
+        quote = await get_usd_quote(asset)
+        return float(quote["price_usd"])
+    except ValueError:
         return None
 
 

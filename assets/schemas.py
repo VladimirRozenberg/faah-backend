@@ -92,6 +92,15 @@ class AssetListResponse(BaseModel):
     items: list[AssetListItem]
 
 
+class UsdQuoteResponse(BaseModel):
+    symbol: str
+    original_currency: str
+    original_price: float
+    price_usd: float
+    rate_to_usd: float
+    rate_date: str
+
+
 class NicheItem(BaseModel):
     id: int
     name: str
