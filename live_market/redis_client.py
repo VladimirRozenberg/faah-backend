@@ -15,32 +15,75 @@ logger = logging.getLogger(__name__)
 LIVE_WORKER_STATUS_KEY = "market:worker:status"
 LIVE_WORKER_STATUS_TTL_SECONDS = 60
 HISTORICAL_FALLBACK_TTL_SECONDS = 15 * 60
-HISTORICAL_FALLBACK_KEY_PREFIX = "market:fallback-attempt:"
-SAVE_HISTORICAL_IF_STALE_SCRIPT = """
+HISTORICAL_FALLBACK_KEY_PREFIX = "market:fallback-attempt:v2:"
+MERGE_QUOTE_FIELDS_SCRIPT = """
+local incoming = cjson.decode(ARGV[1])
 local current_json = redis.call('GET', KEYS[1])
 if current_json then
     local ok, current = pcall(cjson.decode, current_json)
     if ok and current['timestamp'] then
-        if current['timestamp'] >= ARGV[2] then
-            return 0
-        end
-        local incoming = cjson.decode(ARGV[1])
         if current['timestamp'] > incoming['timestamp'] then
-            return 0
+            incoming['price'] = current['price']
+            incoming['timestamp'] = current['timestamp']
+            incoming['source'] = current['source'] or 'live'
+        end
+        for _, field in ipairs({'day_volume', 'previous_close', 'change', 'change_percent'}) do
+            if incoming[field] == nil or incoming[field] == cjson.null then
+                if current[field] ~= nil and current[field] ~= cjson.null then
+                    incoming[field] = current[field]
+                end
+            end
         end
     end
 end
-redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[3])
+redis.call('SET', KEYS[1], cjson.encode(incoming), 'EX', ARGV[2])
+return 1
+"""
+SAVE_HISTORICAL_IF_STALE_SCRIPT = """
+local incoming = cjson.decode(ARGV[1])
+local current_json = redis.call('GET', KEYS[1])
+if current_json then
+    local ok, current = pcall(cjson.decode, current_json)
+    if ok and current['timestamp'] then
+        if current['source'] == 'live' and current['timestamp'] >= ARGV[2] then
+            incoming['price'] = current['price']
+            incoming['timestamp'] = current['timestamp']
+            incoming['source'] = 'live'
+            for _, field in ipairs({'day_volume', 'previous_close', 'change', 'change_percent'}) do
+                if current[field] ~= nil and current[field] ~= cjson.null then
+                    incoming[field] = current[field]
+                end
+            end
+        elseif current['timestamp'] > incoming['timestamp'] then
+            incoming['price'] = current['price']
+            incoming['timestamp'] = current['timestamp']
+            incoming['source'] = current['source'] or 'live'
+            for _, field in ipairs({'day_volume', 'previous_close', 'change', 'change_percent'}) do
+                if incoming[field] == nil or incoming[field] == cjson.null then
+                    if current[field] ~= nil and current[field] ~= cjson.null then
+                        incoming[field] = current[field]
+                    end
+                end
+            end
+        end
+    end
+end
+redis.call('SET', KEYS[1], cjson.encode(incoming), 'EX', ARGV[3])
 return 1
 """
 
 
 async def save_latest_quote(quote: LiveQuote) -> None:
-    """Enregistre le dernier cours connu pendant 24 heures."""
+    """Store the latest quote while retaining fields absent from a live tick."""
 
     key = f"market:latest:{quote.symbol}"
-    # Le nouveau JSON remplace le précédent et relance le délai de 24 heures.
-    await redis_client.set(key, quote.model_dump_json(), ex=CACHE_TTL_SECONDS)
+    await redis_client.eval(
+        MERGE_QUOTE_FIELDS_SCRIPT,
+        1,
+        key,
+        quote.model_dump_json(),
+        CACHE_TTL_SECONDS,
+    )
 
 
 async def get_latest_quote(symbol: str) -> LiveQuote | None:

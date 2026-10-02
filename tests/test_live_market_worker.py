@@ -155,6 +155,68 @@ class LiveMarketWorkerTests(unittest.IsolatedAsyncioTestCase):
         save_historical.assert_awaited_once()
         self.assertEqual(save_historical.await_args.args[0], daily_quote)
 
+    async def test_historical_fallback_fills_missing_fields_on_fresh_live_quote(
+        self,
+    ):
+        symbols = ["AAPL"]
+        live_quote = LiveQuote(
+            symbol="AAPL",
+            price=230.0,
+            timestamp=datetime.now(timezone.utc),
+            source="live",
+            day_volume=1_000,
+        )
+        daily_quote = LiveQuote(
+            symbol="AAPL",
+            price=229.0,
+            timestamp=datetime.now(timezone.utc) - timedelta(days=1),
+            source="daily",
+            day_volume=2_000,
+            previous_close=228.0,
+            change=1.0,
+            change_percent=0.4386,
+        )
+        with (
+            patch(
+                "live_market.worker.get_asset_symbols",
+                new=AsyncMock(return_value=symbols),
+            ),
+            patch(
+                "live_market.worker.get_latest_quotes",
+                new=AsyncMock(return_value={"AAPL": live_quote}),
+            ),
+            patch(
+                "live_market.worker.get_recent_historical_fallback_attempts",
+                new=AsyncMock(return_value=set()),
+            ),
+            patch(
+                "live_market.worker.mark_historical_fallback_attempted",
+                new=AsyncMock(),
+            ) as mark_attempted,
+            patch(
+                "live_market.worker.get_latest_daily_quotes",
+                return_value=[daily_quote],
+            ) as download_daily,
+            patch(
+                "live_market.worker.save_historical_quote_if_stale",
+                new=AsyncMock(return_value=True),
+            ) as save_historical,
+            patch(
+                "live_market.worker.asyncio.sleep",
+                new=AsyncMock(side_effect=RuntimeError("stop")),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "stop"):
+                await refresh_stale_historical_quotes(WorkerRuntime())
+
+        mark_attempted.assert_awaited_once_with(symbols)
+        download_daily.assert_called_once_with(symbols)
+        save_historical.assert_awaited_once()
+        saved_quote, stale_before = save_historical.await_args.args
+        self.assertEqual(saved_quote, daily_quote)
+        self.assertIsInstance(stale_before, datetime)
+        self.assertLess(stale_before, datetime.now(timezone.utc))
+
     def test_count_price_availability_splits_live_delayed_and_unavailable(self):
         now = datetime.now(timezone.utc)
         quotes = {

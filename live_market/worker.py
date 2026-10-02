@@ -87,20 +87,29 @@ async def refresh_stale_historical_quotes(runtime: WorkerRuntime) -> None:
             stale_before = now - timedelta(seconds=STALE_QUOTE_SECONDS)
             stale_symbols = []
             for symbol in symbols:
-                if symbol in attempted_recently:
-                    continue
                 quote = cached_quotes.get(symbol)
-                quote_timestamp = (
-                    quote.timestamp
-                    if quote is not None
-                    else None
-                )
-                if quote_timestamp is None:
+                if quote is None:
                     stale_symbols.append(symbol)
                     continue
+
+                quote_timestamp = quote.timestamp
                 if quote_timestamp.tzinfo is None:
-                    quote_timestamp = quote_timestamp.replace(tzinfo=timezone.utc)
-                if quote_timestamp < stale_before:
+                    quote_timestamp = quote_timestamp.replace(
+                        tzinfo=timezone.utc
+                    )
+                is_stale = quote_timestamp < stale_before
+                is_missing_daily_fields = any(
+                    value is None
+                    for value in (
+                        quote.day_volume,
+                        quote.previous_close,
+                        quote.change,
+                        quote.change_percent,
+                    )
+                )
+                if (
+                    is_stale or is_missing_daily_fields
+                ) and symbol not in attempted_recently:
                     stale_symbols.append(symbol)
 
             if stale_symbols:
