@@ -40,6 +40,11 @@ class LiveMarketWorkerHealth(BaseModel):
     connected: bool
     subscribed_assets: int = 0
     last_heartbeat_at: datetime | None = None
+    last_quote_at: datetime | None = None
+    quotes_received: int = 0
+    live_prices: int = 0
+    delayed_prices: int = 0
+    unavailable_prices: int = 0
     error: str | None = None
 
 

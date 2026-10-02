@@ -78,11 +78,7 @@ async def health(request: Request, db: DbSession) -> HealthResponse:
                 checked_at - worker_snapshot.last_heartbeat_at
             ).total_seconds() <= LIVE_WORKER_STATUS_TTL_SECONDS
             worker_running = worker_snapshot.running and heartbeat_is_fresh
-            worker_healthy = (
-                worker_running
-                and worker_snapshot.connected
-                and worker_snapshot.error is None
-            )
+            worker_healthy = worker_running and worker_snapshot.connected
             live_market_worker = LiveMarketWorkerHealth(
                 status=(
                     "running"
@@ -96,6 +92,11 @@ async def health(request: Request, db: DbSession) -> HealthResponse:
                 connected=worker_snapshot.connected,
                 subscribed_assets=worker_snapshot.subscribed_assets,
                 last_heartbeat_at=worker_snapshot.last_heartbeat_at,
+                last_quote_at=worker_snapshot.last_quote_at,
+                quotes_received=worker_snapshot.quotes_received,
+                live_prices=worker_snapshot.live_prices,
+                delayed_prices=worker_snapshot.delayed_prices,
+                unavailable_prices=worker_snapshot.unavailable_prices,
                 error=worker_snapshot.error
                 or (
                     None

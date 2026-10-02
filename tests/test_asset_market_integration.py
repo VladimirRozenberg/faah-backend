@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from assets.schemas import AssetSummary
 from live_market.market_schemas import LiveQuote
 from routers.assets import list_assets
 
@@ -40,7 +39,11 @@ class AssetMarketIntegrationTests(unittest.IsolatedAsyncioTestCase):
             symbol="AAPL",
             price=230.0,
             timestamp=datetime(2026, 9, 25, tzinfo=timezone.utc),
+            source="daily",
             day_volume=1_000,
+            previous_close=228.0,
+            change=2.0,
+            change_percent=0.8772,
         )
 
         with patch(
@@ -58,10 +61,18 @@ class AssetMarketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         cached_quote.assert_awaited_once_with("AAPL")
         self.assertEqual(response.items[0].market.last_price, quote.price)
         self.assertEqual(response.items[0].market.retrieved_at, quote.timestamp)
-        self.assertIsNone(response.items[0].market.previous_close)
-        self.assertEqual(response.items[0].market.source, "Redis live quote")
+        self.assertEqual(response.items[0].market.previous_close, quote.previous_close)
+        self.assertEqual(response.items[0].market.change, quote.change)
+        self.assertEqual(
+            response.items[0].market.change_percent,
+            quote.change_percent,
+        )
+        self.assertEqual(
+            response.items[0].market.source,
+            "Yahoo Finance daily close cached in Redis",
+        )
 
-    async def test_asset_list_uses_yahoo_fallback_when_redis_is_unavailable(self):
+    async def test_asset_list_does_not_call_yahoo_when_redis_is_unavailable(self):
         asset = database_asset()
         result = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [asset]))
         db = SimpleNamespace(
@@ -70,18 +81,6 @@ class AssetMarketIntegrationTests(unittest.IsolatedAsyncioTestCase):
             get=AsyncMock(return_value=None),
         )
         user = SimpleNamespace(user_id=3)
-        fallback_summary = AssetSummary(
-            symbol="AAPL",
-            name="Apple",
-            type="stock",
-            currency="USD",
-            last_price=231.0,
-            previous_close=228.0,
-            change=3.0,
-            change_percent=1.3158,
-            retrieved_at=datetime(2026, 9, 25, tzinfo=timezone.utc),
-        )
-
         with (
             patch(
                 "routers.assets.get_latest_quote",
@@ -89,7 +88,7 @@ class AssetMarketIntegrationTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch(
                 "routers.assets.get_market_assets",
-                return_value=[fallback_summary],
+                return_value=[],
             ) as yahoo_fallback,
         ):
             response = await list_assets(
@@ -100,10 +99,10 @@ class AssetMarketIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 search="",
             )
 
-        yahoo_fallback.assert_called_once_with([asset])
-        self.assertEqual(response.items[0].market, fallback_summary)
+        yahoo_fallback.assert_not_called()
+        self.assertIsNone(response.items[0].market)
 
-    async def test_asset_list_uses_yahoo_for_cache_misses_in_one_batch(self):
+    async def test_asset_list_leaves_cache_misses_empty_without_yahoo_call(self):
         assets = [database_asset(), database_asset()]
         assets[1].ast_id = 8
         assets[1].ast_symbol = "MSFT"
@@ -121,18 +120,6 @@ class AssetMarketIntegrationTests(unittest.IsolatedAsyncioTestCase):
             timestamp=datetime(2026, 9, 25, tzinfo=timezone.utc),
             day_volume=1_000,
         )
-        fallback_summary = AssetSummary(
-            symbol="MSFT",
-            name="Microsoft",
-            type="stock",
-            currency="USD",
-            last_price=510.0,
-            previous_close=505.0,
-            change=5.0,
-            change_percent=0.9901,
-            retrieved_at=datetime(2026, 9, 25, tzinfo=timezone.utc),
-        )
-
         async def cached_quote(symbol):
             return quote if symbol == "AAPL" else None
 
@@ -143,7 +130,7 @@ class AssetMarketIntegrationTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch(
                 "routers.assets.get_market_assets",
-                return_value=[fallback_summary],
+                return_value=[],
             ) as yahoo_fallback,
         ):
             response = await list_assets(
@@ -154,11 +141,11 @@ class AssetMarketIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 search="",
             )
 
-        yahoo_fallback.assert_called_once_with([assets[1]])
+        yahoo_fallback.assert_not_called()
         markets = {item.symbol: item.market for item in response.items}
         self.assertEqual(markets["AAPL"].last_price, quote.price)
         self.assertEqual(markets["AAPL"].source, "Redis live quote")
-        self.assertEqual(markets["MSFT"], fallback_summary)
+        self.assertIsNone(markets["MSFT"])
 
 
 if __name__ == "__main__":

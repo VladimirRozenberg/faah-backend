@@ -1,12 +1,14 @@
 """Récupère les prix et les bougies avec yfinance."""
 
 from datetime import datetime, timezone
+import math
 from urllib.parse import quote
 
 import pandas as pd
 import yfinance as yf
 
 from assets.schemas import AssetSummary, Candle, CandleResponse
+from live_market.market_schemas import LiveQuote
 from models import Asset
 
 
@@ -127,6 +129,82 @@ def get_market_assets(database_assets: list[Asset]) -> list[AssetSummary]:
     if not results:
         raise MarketDataUnavailableError(
             "Yahoo Finance n'a retourné aucun cours."
+        )
+
+    return results
+
+
+def get_latest_daily_quotes(symbols: list[str]) -> list[LiveQuote]:
+    """Fetch one batch of recent daily closes for symbols lacking fresh quotes."""
+
+    if not symbols:
+        return []
+
+    try:
+        market_data = yf.download(
+            symbols,
+            period="5d",
+            interval="1d",
+            group_by="ticker",
+            auto_adjust=False,
+            progress=False,
+            threads=True,
+        )
+    except Exception as error:
+        raise MarketDataUnavailableError(
+            "Impossible de contacter Yahoo Finance."
+        ) from error
+
+    if market_data.empty:
+        raise MarketDataUnavailableError(
+            "Yahoo Finance n'a retourné aucun cours."
+        )
+
+    results = []
+    for symbol in symbols:
+        asset_data = get_symbol_data(market_data, symbol)
+        if asset_data.empty or "Close" not in asset_data:
+            continue
+
+        closes = pd.to_numeric(asset_data["Close"], errors="coerce").dropna()
+        closes = closes[closes.map(math.isfinite)]
+        if closes.empty:
+            continue
+
+        price = float(closes.iloc[-1])
+        if not math.isfinite(price) or price <= 0:
+            continue
+
+        previous_close = float(closes.iloc[-2]) if len(closes) > 1 else price
+        change = price - previous_close
+        change_percent = (
+            change / previous_close * 100 if previous_close != 0 else 0
+        )
+        timestamp = pd.Timestamp(closes.index[-1]).to_pydatetime()
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        else:
+            timestamp = timestamp.astimezone(timezone.utc)
+
+        volume = None
+        if "Volume" in asset_data:
+            volumes = pd.to_numeric(
+                asset_data["Volume"], errors="coerce"
+            ).dropna()
+            if not volumes.empty:
+                volume = int(volumes.iloc[-1])
+
+        results.append(
+            LiveQuote(
+                symbol=symbol,
+                price=price,
+                timestamp=timestamp,
+                source="daily",
+                day_volume=volume,
+                previous_close=previous_close,
+                change=change,
+                change_percent=change_percent,
+            )
         )
 
     return results

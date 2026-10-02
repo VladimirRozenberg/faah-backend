@@ -73,6 +73,12 @@ class HealthTests(unittest.IsolatedAsyncioTestCase):
             connected=True,
             subscribed_assets=42,
             last_heartbeat_at=datetime.now(timezone.utc),
+            last_quote_at=datetime.now(timezone.utc),
+            quotes_received=128,
+            live_prices=10,
+            delayed_prices=20,
+            unavailable_prices=12,
+            error="Redis quote write failed (ConnectionError)",
         )
 
         with (
@@ -94,6 +100,15 @@ class HealthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.live_market_worker.status, "running")
         self.assertTrue(result.live_market_worker.healthy)
         self.assertEqual(result.live_market_worker.subscribed_assets, 42)
+        self.assertEqual(result.live_market_worker.quotes_received, 128)
+        self.assertEqual(result.live_market_worker.live_prices, 10)
+        self.assertEqual(result.live_market_worker.delayed_prices, 20)
+        self.assertEqual(result.live_market_worker.unavailable_prices, 12)
+        self.assertIsNotNone(result.live_market_worker.last_quote_at)
+        self.assertEqual(
+            result.live_market_worker.error,
+            "Redis quote write failed (ConnectionError)",
+        )
 
 
 if __name__ == "__main__":

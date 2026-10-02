@@ -145,7 +145,7 @@ async def add_market_information(
     assets: list[Asset],
     items: list[AssetListItem],
 ) -> None:
-    """Attach cached live quotes and fetch uncached assets from Yahoo in one batch."""
+    """Attach cached live quotes without making external market-data requests."""
 
     if not assets:
         return
@@ -164,26 +164,10 @@ async def add_market_information(
         quote.symbol: quote for quote in quotes if quote is not None
     }
     assets_by_symbol = {asset.ast_symbol: asset for asset in assets}
-    missing_assets = [
-        asset for asset in assets if asset.ast_symbol not in quotes_by_symbol
-    ]
-    fallback_by_symbol = {}
-    if missing_assets:
-        try:
-            summaries = await asyncio.to_thread(get_market_assets, missing_assets)
-            fallback_by_symbol = {
-                summary.symbol: summary for summary in summaries
-            }
-        except Exception:
-            logger.exception(
-                "Market information unavailable for %d uncached asset(s)",
-                len(missing_assets),
-            )
 
     for item in items:
         cached_quote = quotes_by_symbol.get(item.symbol)
         if cached_quote is None:
-            item.market = fallback_by_symbol.get(item.symbol)
             continue
 
         asset = assets_by_symbol[item.symbol]
@@ -199,12 +183,16 @@ async def add_market_information(
             exchange=asset.ast_exchange,
             currency=asset.ast_currency or "USD",
             last_price=cached_quote.price,
-            previous_close=None,
-            change=None,
-            change_percent=None,
+            previous_close=cached_quote.previous_close,
+            change=cached_quote.change,
+            change_percent=cached_quote.change_percent,
             volume=cached_quote.day_volume,
             retrieved_at=cached_quote.timestamp,
-            source="Redis live quote",
+            source=(
+                "Yahoo Finance daily close cached in Redis"
+                if cached_quote.source == "daily"
+                else "Redis live quote"
+            ),
         )
 
 
