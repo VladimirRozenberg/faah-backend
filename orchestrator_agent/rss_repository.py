@@ -5,10 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import RSSFeed, RSSFeedRun
+from orchestrator_agent.job_limits import JOB_TIMEOUT_ERROR, JOB_TIMEOUT_SECONDS
 from orchestrator_agent.schemas import ActionType, Instruction, RSSFeedState
 
 
@@ -114,6 +115,25 @@ class RSSFeedRepository:
             feed.rsf_pending_instruction_id = instruction.instruction_id
 
         feed.rsf_updated_at = now
+        await self.session.commit()
+
+    async def fail_expired_runs(self) -> None:
+        """Close abandoned history entries without overwriting newer feed state."""
+
+        now = utc_now()
+        await self.session.execute(
+            update(RSSFeedRun)
+            .where(
+                RSSFeedRun.rfr_status == "running",
+                RSSFeedRun.rfr_started_at
+                <= now - timedelta(seconds=JOB_TIMEOUT_SECONDS),
+            )
+            .values(
+                rfr_status="failed",
+                rfr_completed_at=now,
+                rfr_error=JOB_TIMEOUT_ERROR,
+            )
+        )
         await self.session.commit()
 
     async def claim_next_due(self, now: datetime | None = None) -> ClaimedFeed | None:

@@ -14,6 +14,7 @@ from orchestrator_agent.follow_up import (
     FollowUpAnalysisRepository,
 )
 from orchestrator_agent.loop import OrchestrationLoop
+from orchestrator_agent.history import OrchestratorHistoryRepository
 from orchestrator_agent.memory import JsonMemoryStore
 from orchestrator_agent.orchestrator import Orchestrator
 from orchestrator_agent.policy import OrchestratorPolicy
@@ -54,6 +55,7 @@ async def _run_service_pass(
     """Run one service pass and return the next orchestration deadline."""
 
     async with AsyncSessionLocal() as db:
+        await OrchestratorHistoryRepository(db).import_memory(memory.load())
         follow_up_executions = await FollowUpAnalysisExecutor(
             FollowUpAnalysisRepository(db)
         ).run_pending()
@@ -78,6 +80,7 @@ async def _run_service_pass(
                 policy=OrchestratorPolicy(allowed_feeds=allowed_feeds),
                 memory=memory,
                 bus=feed_repository,
+                history=OrchestratorHistoryRepository(db),
             )
             result = await OrchestrationLoop(
                 orchestrator,

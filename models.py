@@ -990,6 +990,9 @@ class OrchestratorAnalysisJob(Base):
     oaj_result_anl_id: Mapped[int | None] = mapped_column(
         ForeignKey("analyses.anl_id", ondelete="SET NULL")
     )
+    oaj_cycle_id: Mapped[int | None] = mapped_column(
+        ForeignKey("orchestrator_cycles.orc_id", ondelete="SET NULL"), index=True
+    )
     oaj_question: Mapped[str] = mapped_column(Text, nullable=False)
     oaj_reason: Mapped[str] = mapped_column(Text, nullable=False)
     oaj_priority: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1007,6 +1010,52 @@ class OrchestratorAnalysisJob(Base):
     )
     oaj_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     oaj_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ============================================================
+# ORCHESTRATOR HISTORY
+# ============================================================
+
+class OrchestratorCycle(Base):
+    __tablename__ = "orchestrator_cycles"
+    __table_args__ = (
+        CheckConstraint("orc_status IN ('applying', 'completed', 'failed', 'legacy')",
+                        name="chk_orchestrator_cycle_status"),
+        Index("idx_orchestrator_cycles_started", "orc_started_at", "orc_id"),
+    )
+
+    orc_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    orc_history_key: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    orc_source: Mapped[str] = mapped_column(String, nullable=False)
+    orc_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    orc_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    orc_signal_window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    orc_prm_id: Mapped[int | None] = mapped_column(ForeignKey("prompts.prm_id", ondelete="SET NULL"))
+    orc_model: Mapped[str | None] = mapped_column(String)
+    orc_status: Mapped[str] = mapped_column(String, nullable=False)
+    orc_error: Mapped[str | None] = mapped_column(Text)
+    orc_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    orc_raw_model_content: Mapped[str | None] = mapped_column(Text)
+
+
+class OrchestratorDecision(Base):
+    __tablename__ = "orchestrator_decisions"
+    __table_args__ = (
+        CheckConstraint("ord_status IN ('pending', 'rejected', 'approved', 'applied', 'failed', 'legacy_approved')",
+                        name="chk_orchestrator_decision_status"),
+        Index("idx_orchestrator_decisions_cycle", "ord_cycle_id", "ord_position", unique=True),
+    )
+
+    ord_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ord_cycle_id: Mapped[int] = mapped_column(ForeignKey("orchestrator_cycles.orc_id", ondelete="CASCADE"), nullable=False)
+    ord_rsf_id: Mapped[int | None] = mapped_column(ForeignKey("rss_feeds.rsf_id", ondelete="SET NULL"))
+    ord_position: Mapped[int] = mapped_column(Integer, nullable=False)
+    ord_proposal: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    ord_approved: Mapped[bool | None] = mapped_column(Boolean)
+    ord_status: Mapped[str] = mapped_column(String, nullable=False)
+    ord_rejection_reason: Mapped[str | None] = mapped_column(Text)
+    ord_error: Mapped[str | None] = mapped_column(Text)
+    ord_instruction_id: Mapped[str | None] = mapped_column(String, unique=True)
 
 
 # ============================================================

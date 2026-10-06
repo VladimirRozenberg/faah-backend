@@ -11,6 +11,7 @@ from orchestrator_agent.brain import LLMOrchestrationBrain
 from orchestrator_agent.context import DatabaseContextProvider
 from orchestrator_agent.follow_up import FollowUpAnalysisRepository
 from orchestrator_agent.loop import OrchestrationLoop
+from orchestrator_agent.history import OrchestratorHistoryRepository
 from orchestrator_agent.memory import JsonMemoryStore
 from orchestrator_agent.orchestrator import Orchestrator
 from orchestrator_agent.policy import OrchestratorPolicy
@@ -20,12 +21,24 @@ from orchestrator_agent.schemas import (
     CycleResult,
     RSSFeedRunState,
     RSSFeedState,
+    OrchestratorDecisionPage,
 )
 
 
 router = APIRouter(prefix="/api/orchestrator", tags=["Orchestrator prototype"])
 
 DEFAULT_TEST_MEMORY_PATH = "data/orchestrator_swagger_memory.json"
+
+
+@router.get("/decisions", response_model=OrchestratorDecisionPage)
+async def list_orchestrator_decisions(
+    db: DbSession,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> dict:
+    """List durable cycle decisions, newest first, using news pagination."""
+
+    return await OrchestratorHistoryRepository(db).list_page(page, page_size)
 
 
 @router.get("/rss-feeds", response_model=list[RSSFeedState])
@@ -90,6 +103,10 @@ async def run_test_orchestration(
     memory_path = Path(
         os.getenv("ORCHESTRATOR_TEST_MEMORY_PATH", DEFAULT_TEST_MEMORY_PATH)
     )
+    memory = JsonMemoryStore(memory_path)
+    history = OrchestratorHistoryRepository(db, source="test")
+    # Archive retained history before a requested runtime-memory reset.
+    await history.import_memory(memory.load())
     if reset_memory and memory_path.exists():
         memory_path.unlink()
 
@@ -100,8 +117,9 @@ async def run_test_orchestration(
         policy=OrchestratorPolicy(
             allowed_feeds=allowed_feeds,
         ),
-        memory=JsonMemoryStore(memory_path),
+        memory=memory,
         bus=feed_repository,
+        history=history,
     )
     return await OrchestrationLoop(
         agent,

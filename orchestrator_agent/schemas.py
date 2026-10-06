@@ -156,6 +156,46 @@ class AnalysisFollowUpJobState(BaseModel):
     completed_at: datetime | None = None
 
 
+class RSSDecisionHistory(BaseModel):
+    decision_id: int
+    feed_id: int | None = None
+    proposal: DecisionProposal
+    approved: bool | None = None
+    status: str
+    rejection_reason: str | None = None
+    error: str | None = None
+    instruction_id: str | None = None
+
+
+class OrchestratorCycleHistory(BaseModel):
+    cycle_id: int
+    source: str
+    started_at: datetime
+    completed_at: datetime | None = None
+    signal_window_start: datetime
+    prompt_id: int | None = None
+    model: str | None = None
+    status: str
+    error: str | None = None
+    history_complete: bool
+    signal_ids: list[int]
+    situation_summary: str
+    follow_up_analysis: list[AnalysisFollowUp]
+    next_instructions: str
+    next_run_in_seconds: int
+    next_run_at: datetime
+    rejected_rss_proposals: int
+    rss_decisions: list[RSSDecisionHistory]
+    follow_up_jobs: list[AnalysisFollowUpJobState]
+
+
+class OrchestratorDecisionPage(BaseModel):
+    count: int
+    page: int
+    page_size: int
+    items: list[OrchestratorCycleHistory]
+
+
 class CycleContext(BaseModel):
     started_at: datetime
     signal_window_start: datetime
@@ -216,6 +256,7 @@ class CycleRecord(BaseModel):
 
 
 class CycleResult(BaseModel):
+    cycle_id: int | None = None
     context: CycleContext
     decision: CycleDecision
     model: str

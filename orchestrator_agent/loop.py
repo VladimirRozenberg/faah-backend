@@ -40,6 +40,7 @@ class FollowUpRepository(Protocol):
     async def enqueue_many(
         self,
         requests: list[AnalysisFollowUp],
+        *, cycle_id: int | None = None,
     ) -> list[AnalysisFollowUpJobState]: ...
 
 
@@ -66,6 +67,8 @@ class OrchestrationLoop:
     async def run_once(self, now: datetime | None = None) -> CycleResult:
         started_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         state = self.orchestrator.memory.load()
+        if self.orchestrator.history is not None:
+            await self.orchestrator.history.import_memory(state)
         window_start = (
             state.last_cycle_at - self.signal_window_overlap
             if state.last_cycle_at is not None
@@ -102,22 +105,36 @@ class OrchestrationLoop:
         brain_result = await self.brain.decide(context)
         decision = brain_result.decision
 
-        created_follow_up_jobs = (
-            await self.follow_up_repository.enqueue_many(
-                decision.follow_up_analysis
-            )
-            if self.follow_up_repository is not None
-            else []
+        cycle_id = (
+            await self.orchestrator.history.begin(context, brain_result)
+            if self.orchestrator.history is not None else None
         )
-
-        approved = []
-        rejected = 0
-        for proposal in decision.rss_proposals:
-            instruction = await self.orchestrator.submit(proposal)
-            if instruction is None:
-                rejected += 1
+        try:
+            if self.follow_up_repository is not None:
+                kwargs = {"cycle_id": cycle_id} if cycle_id is not None else {}
+                created_follow_up_jobs = await self.follow_up_repository.enqueue_many(
+                    decision.follow_up_analysis, **kwargs
+                )
             else:
-                approved.append(instruction)
+                created_follow_up_jobs = []
+
+            approved = []
+            rejected = 0
+            for position, proposal in enumerate(decision.rss_proposals):
+                instruction = await self.orchestrator.submit(
+                    proposal, cycle_id=cycle_id, position=position,
+                )
+                if instruction is None:
+                    rejected += 1
+                else:
+                    approved.append(instruction)
+            if cycle_id is not None:
+                await self.orchestrator.history.finish(cycle_id)
+        except Exception as exc:
+            if cycle_id is not None:
+                await self.orchestrator.history.session.rollback()
+                await self.orchestrator.history.finish(cycle_id, error=str(exc))
+            raise
 
         self.orchestrator.memory.record_cycle(
             CycleRecord(
@@ -137,6 +154,7 @@ class OrchestrationLoop:
             )
         )
         return CycleResult(
+            cycle_id=cycle_id,
             context=context,
             decision=decision,
             model=brain_result.model,

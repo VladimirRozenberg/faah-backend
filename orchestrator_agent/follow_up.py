@@ -9,7 +9,7 @@ import logging
 import os
 import re
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
@@ -20,6 +20,7 @@ from models import (
     OrchestratorAnalysisJob,
 )
 from orchestrator_agent.schemas import AnalysisFollowUp, AnalysisFollowUpJobState
+from orchestrator_agent.job_limits import JOB_TIMEOUT_ERROR, JOB_TIMEOUT_SECONDS
 from prompt.llm_client import get_alibaba_client
 from prompt.price_context import get_price_context
 from prompt.recording import record_prompt
@@ -78,6 +79,7 @@ class FollowUpAnalysisRepository:
     async def enqueue_many(
         self,
         requests: list[AnalysisFollowUp],
+        *, cycle_id: int | None = None,
     ) -> list[AnalysisFollowUpJobState]:
         """Persist new requests while suppressing active and exact duplicates."""
 
@@ -133,6 +135,7 @@ class FollowUpAnalysisRepository:
                 continue
 
             job = OrchestratorAnalysisJob(
+                oaj_cycle_id=cycle_id,
                 oaj_ast_id=asset.ast_id,
                 oaj_question=request.question.strip(),
                 oaj_reason=request.reason.strip(),
@@ -176,6 +179,25 @@ class FollowUpAnalysisRepository:
             statement = statement.where(or_(*filters))
         jobs = list((await self.session.scalars(statement)).all())
         return [await self._state(job) for job in jobs]
+
+    async def fail_expired_jobs(self) -> None:
+        """Clear abandoned running claims, including jobs from older deployments."""
+
+        now = utc_now()
+        await self.session.execute(
+            update(OrchestratorAnalysisJob)
+            .where(
+                OrchestratorAnalysisJob.oaj_status == "running",
+                OrchestratorAnalysisJob.oaj_started_at
+                <= now - timedelta(seconds=JOB_TIMEOUT_SECONDS),
+            )
+            .values(
+                oaj_status="failed",
+                oaj_completed_at=now,
+                oaj_error=JOB_TIMEOUT_ERROR,
+            )
+        )
+        await self.session.commit()
 
     async def claim_next(self) -> OrchestratorAnalysisJob | None:
         job = await self.session.scalar(
@@ -254,17 +276,22 @@ class FollowUpAnalysisExecutor:
 
     async def run_pending(self, limit: int = MAX_JOBS_PER_PASS) -> int:
         executions = 0
+        await self.repository.fail_expired_jobs()
         while executions < limit and (job := await self.repository.claim_next()):
             executions += 1
             job_id = job.oaj_id
             try:
-                analysis_id = await self._execute(job)
+                async with asyncio.timeout(JOB_TIMEOUT_SECONDS):
+                    analysis_id = await self._execute(job)
                 await self.repository.succeed(job_id, analysis_id)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 await self.repository.session.rollback()
-                await self.repository.fail(job_id, str(exc))
+                await self.repository.fail(
+                    job_id,
+                    JOB_TIMEOUT_ERROR if isinstance(exc, TimeoutError) else str(exc),
+                )
                 logger.exception("Follow-up analysis failed: job_id=%s", job_id)
         return executions
 

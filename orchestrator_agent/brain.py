@@ -111,8 +111,8 @@ class LLMOrchestrationBrain:
             system_instructions=SYSTEM_INSTRUCTIONS,
             user_prompt=model_input,
         )
-        # The orchestrator has no database result row of its own. Commit the
-        # prompt before the network call so even a failed cycle is auditable.
+        # Commit the prompt before the network call so model failures remain
+        # auditable even when no valid decision is returned.
         await self.db.commit()
         response = await get_alibaba_client().chat.completions.create(
             model=self.model,
