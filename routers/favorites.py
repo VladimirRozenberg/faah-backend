@@ -16,6 +16,7 @@ async def list_favorites(user: CurrentUser, db: DbSession) -> dict:
     return {"asset_ids": list(ids)}
 
 
+@router.post("/{asset_id}", status_code=204)
 @router.put("/{asset_id}", status_code=204)
 async def add_favorite(asset_id: int, user: CurrentUser, db: DbSession) -> Response:
     if await db.get(Asset, asset_id) is None:

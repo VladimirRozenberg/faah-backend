@@ -4,8 +4,9 @@ from datetime import datetime, timezone
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from auth.login import get_current_user
 from db import DbSession
 from orchestrator_agent.brain import LLMOrchestrationBrain
 from orchestrator_agent.context import DatabaseContextProvider
@@ -30,7 +31,7 @@ router = APIRouter(prefix="/api/orchestrator", tags=["Orchestrator prototype"])
 DEFAULT_TEST_MEMORY_PATH = "data/orchestrator_swagger_memory.json"
 
 
-@router.get("/decisions", response_model=OrchestratorDecisionPage)
+@router.get("/decisions", dependencies=[Depends(get_current_user)], response_model=OrchestratorDecisionPage)
 async def list_orchestrator_decisions(
     db: DbSession,
     page: int = Query(default=1, ge=1),

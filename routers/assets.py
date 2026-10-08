@@ -5,7 +5,7 @@ import logging
 from typing import Annotated, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,7 +30,7 @@ from assets.schemas import (
     UsdQuoteResponse,
 )
 
-from auth.login import CurrentUser
+from auth.login import CurrentUser, get_current_user
 from db import DbSession
 from live_market.market_schemas import LiveQuote
 from live_market.redis_client import get_latest_quote
@@ -56,7 +56,7 @@ router = APIRouter(prefix="/api", tags=["Marché"])
 logger = logging.getLogger(__name__)
 
 
-@router.get("/assets/{symbol}/usd-quote", response_model=UsdQuoteResponse)
+@router.get("/assets/{symbol}/usd-quote", dependencies=[Depends(get_current_user)], response_model=UsdQuoteResponse)
 async def asset_usd_quote(symbol: str, db: DbSession) -> UsdQuoteResponse:
     # Le frontend affiche l'estimation ; le serveur recalcule lors de la confirmation.
     from portfolio.repository import get_usd_quote
@@ -347,7 +347,7 @@ async def list_assets(
     )
 
 
-@router.get("/niches", response_model=NicheListResponse)
+@router.get("/niches", dependencies=[Depends(get_current_user)], response_model=NicheListResponse)
 async def list_niches(db: DbSession) -> NicheListResponse:
     """Return the curated niche catalog used by portfolio preferences."""
 
@@ -440,7 +440,7 @@ async def get_asset(symbol: str, db: DbSession) -> AssetItem:
     return await create_asset_item(db, asset)
 
 
-@router.get("/assets/{symbol}/market", response_model=AssetSummary)
+@router.get("/assets/{symbol}/market", dependencies=[Depends(get_current_user)], response_model=AssetSummary)
 async def get_asset_market(symbol: str, db: DbSession) -> AssetSummary:
     """Retourne le prix et la variation d'un actif avec yfinance."""
 
@@ -452,7 +452,7 @@ async def get_asset_market(symbol: str, db: DbSession) -> AssetSummary:
         raise create_http_error(error) from error
 
 
-@router.get("/assets/{symbol}/candles", response_model=CandleResponse)
+@router.get("/assets/{symbol}/candles", dependencies=[Depends(get_current_user)], response_model=CandleResponse)
 async def get_asset_candles(
     symbol: str,
     db: DbSession,
@@ -475,7 +475,7 @@ async def get_asset_candles(
         raise create_http_error(error) from error
 
 
-@router.get("/history-options")
+@router.get("/history-options", dependencies=[Depends(get_current_user)])
 def history_options() -> dict[str, list[str]]:
     """Indique à Avalonia les périodes et intervalles autorisés."""
 
@@ -485,7 +485,7 @@ def history_options() -> dict[str, list[str]]:
     }
 
 
-@router.get("/assets/{symbol}/news")
+@router.get("/assets/{symbol}/news", dependencies=[Depends(get_current_user)])
 async def get_asset_news(symbol: str, db: DbSession) -> dict:
     """Actualités liées à l'actif par une classification enregistrée en base."""
     asset = await find_asset_or_404(db, symbol)

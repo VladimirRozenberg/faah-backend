@@ -3,9 +3,10 @@
 from datetime import datetime, timedelta, timezone
 import os
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import func, select, text
 
+from auth.login import get_current_user
 from db import DbSession
 from external_health import get_external_health
 from live_market.redis_client import (
@@ -32,7 +33,7 @@ from schemas import (
 )
 
 
-router = APIRouter(tags=["Système"])
+router = APIRouter(dependencies=[Depends(get_current_user)], tags=["Système"])
 
 
 @router.get("/health/external")

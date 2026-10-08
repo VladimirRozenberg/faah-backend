@@ -5,6 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, select
 
+from auth.login import CurrentUser
 from db import DbSession
 from models import (
     Portfolio,
@@ -166,14 +167,16 @@ async def _recommendations_by_run(
 
 
 @router.get(
-    "/users/{user_id}/portfolios",
+    "/users/me/portfolios",
     response_model=PortfolioSummaryListResponse,
 )
 async def get_user_portfolios(
-    user_id: int,
+    user: CurrentUser,
     db: DbSession,
 ) -> PortfolioSummaryListResponse:
     """Return all portfolios owned by the user."""
+
+    user_id = user.user_id
 
     try:
         return await list_user_portfolios(db, user_id)
@@ -183,14 +186,16 @@ async def get_user_portfolios(
 
 
 @router.get(
-    "/users/{user_id}/available-cash",
+    "/users/me/available-cash",
     response_model=UserAvailableCashResponse,
 )
 async def get_user_available_cash(
-    user_id: int,
+    user: CurrentUser,
     db: DbSession,
 ) -> UserAvailableCashResponse:
     """Return the available simulated USD cash for one user."""
+
+    user_id = user.user_id
 
     try:
         return await read_user_available_cash(db, user_id)
@@ -199,14 +204,16 @@ async def get_user_available_cash(
 
 
 @router.get(
-    "/users/{user_id}/asset-value",
+    "/users/me/asset-value",
     response_model=UserAssetValueResponse,
 )
 async def get_user_asset_value(
-    user_id: int,
+    user: CurrentUser,
     db: DbSession,
 ) -> UserAssetValueResponse:
     """Return the USD value of active holdings across all user portfolios."""
+
+    user_id = user.user_id
 
     try:
         return await read_user_asset_value(db, user_id)
@@ -216,11 +223,11 @@ async def get_user_asset_value(
 
 
 @router.get(
-    "/users/{user_id}/recommendations",
+    "/users/me/recommendations",
     response_model=UserRecommendationPageResponse,
 )
 async def get_user_recommendations(
-    user_id: int,
+    user: CurrentUser,
     db: DbSession,
     within: Literal["1h"] | None = Query(default=None),
     kind: Literal[
@@ -236,6 +243,8 @@ async def get_user_recommendations(
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> UserRecommendationPageResponse:
     """Return a filtered page of recommendations across the user's portfolios."""
+
+    user_id = user.user_id
 
     try:
         await get_active_account(db, user_id)
@@ -298,11 +307,11 @@ async def get_user_recommendations(
 
 
 @router.get(
-    "/users/{user_id}/portfolios/{portfolio_id}/recommendations",
+    "/users/me/portfolios/{portfolio_id}/recommendations",
     response_model=PortfolioRecommendationPageResponse,
 )
 async def get_portfolio_recommendations(
-    user_id: int,
+    user: CurrentUser,
     portfolio_id: int,
     db: DbSession,
     within: Literal["1h"] | None = Query(default=None),
@@ -319,6 +328,8 @@ async def get_portfolio_recommendations(
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> PortfolioRecommendationPageResponse:
     """Return a page of recommendations belonging to one owned portfolio."""
+
+    user_id = user.user_id
 
     try:
         await get_active_account(db, user_id)
@@ -386,16 +397,18 @@ async def get_portfolio_recommendations(
 
 
 @router.post(
-    "/users/{user_id}/portfolio/create",
+    "/users/me/portfolio/create",
     response_model=PortfolioResponse,
     status_code=status.HTTP_201_CREATED,
 )
 async def create_portfolio(
-    user_id: int,
+    user: CurrentUser,
     data: PortfolioCreateRequest,
     db: DbSession,
 ) -> PortfolioResponse:
     """Create another portfolio and its dedicated strategist."""
+
+    user_id = user.user_id
 
     try:
         return await create_user_portfolio(db, user_id, data)
@@ -404,16 +417,18 @@ async def create_portfolio(
 
 
 @router.patch(
-    "/users/{user_id}/portfolios/{portfolio_id}",
+    "/users/me/portfolios/{portfolio_id}",
     response_model=PortfolioResponse,
 )
 async def update_portfolio(
-    user_id: int,
+    user: CurrentUser,
     portfolio_id: int,
     data: PortfolioUpdateRequest,
     db: DbSession,
 ) -> PortfolioResponse:
     """Update an owned portfolio, including its active state."""
+
+    user_id = user.user_id
 
     try:
         return await update_user_portfolio(db, user_id, portfolio_id, data)
@@ -422,15 +437,17 @@ async def update_portfolio(
 
 
 @router.get(
-    "/users/{user_id}/portfolios/{portfolio_id}",
+    "/users/me/portfolios/{portfolio_id}",
     response_model=PortfolioResponse,
 )
 async def get_portfolio(
-    user_id: int,
+    user: CurrentUser,
     portfolio_id: int,
     db: DbSession,
 ) -> PortfolioResponse:
     """Return one portfolio after verifying ownership."""
+
+    user_id = user.user_id
 
     try:
         return await read_user_portfolio(db, user_id, portfolio_id)
@@ -439,15 +456,17 @@ async def get_portfolio(
 
 
 @router.get(
-    "/users/{user_id}/portfolios/{portfolio_id}/strategist",
+    "/users/me/portfolios/{portfolio_id}/strategist",
     response_model=PortfolioStrategistResponse,
 )
 async def get_portfolio_strategist(
-    user_id: int,
+    user: CurrentUser,
     portfolio_id: int,
     db: DbSession,
 ) -> PortfolioStrategistResponse:
     """Return frontend-ready strategist state for an owned portfolio."""
+
+    user_id = user.user_id
 
     strategist = await _owned_strategist(db, user_id, portfolio_id)
     active_run = await db.scalar(
@@ -506,16 +525,18 @@ async def get_portfolio_strategist(
 
 
 @router.get(
-    "/users/{user_id}/portfolios/{portfolio_id}/strategist/reviews",
+    "/users/me/portfolios/{portfolio_id}/strategist/reviews",
     response_model=StrategistReviewListResponse,
 )
 async def get_portfolio_strategist_reviews(
-    user_id: int,
+    user: CurrentUser,
     portfolio_id: int,
     db: DbSession,
     limit: int = Query(default=50, ge=1, le=200),
 ) -> StrategistReviewListResponse:
     """Return strategist review history and its normalized recommendations."""
+
+    user_id = user.user_id
 
     strategist = await _owned_strategist(db, user_id, portfolio_id)
     runs = list(
@@ -536,16 +557,18 @@ async def get_portfolio_strategist_reviews(
 
 
 @router.post(
-    "/users/{user_id}/portfolios/{portfolio_id}/strategist/reviews",
+    "/users/me/portfolios/{portfolio_id}/strategist/reviews",
     response_model=QueueStrategistReviewResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def request_portfolio_strategist_review(
-    user_id: int,
+    user: CurrentUser,
     portfolio_id: int,
     db: DbSession,
 ) -> QueueStrategistReviewResponse:
     """Queue one full review, reusing an already active full review if present."""
+
+    user_id = user.user_id
 
     strategist = await _owned_strategist(db, user_id, portfolio_id, lock=True)
     active_run = await db.scalar(
@@ -574,16 +597,18 @@ async def request_portfolio_strategist_review(
 
 
 @router.post(
-    "/users/{user_id}/portfolios/{portfolio_id}/assets/buy",
+    "/users/me/portfolios/{portfolio_id}/assets/buy",
     response_model=PortfolioResponse,
 )
 async def buy_portfolio_asset_by_id(
-    user_id: int,
+    user: CurrentUser,
     portfolio_id: int,
     data: BuyAssetRequest,
     db: DbSession,
 ) -> PortfolioResponse:
     """Add a simulated purchase to a selected owned portfolio."""
+
+    user_id = user.user_id
 
     try:
         return await buy_asset(db, user_id, data, portfolio_id)
@@ -592,16 +617,18 @@ async def buy_portfolio_asset_by_id(
 
 
 @router.post(
-    "/users/{user_id}/portfolios/{portfolio_id}/assets/sell",
+    "/users/me/portfolios/{portfolio_id}/assets/sell",
     response_model=PortfolioResponse,
 )
 async def sell_portfolio_asset_by_id(
-    user_id: int,
+    user: CurrentUser,
     portfolio_id: int,
     data: SellAssetRequest,
     db: DbSession,
 ) -> PortfolioResponse:
     """Sell from a selected owned portfolio."""
+
+    user_id = user.user_id
 
     try:
         return await sell_asset(db, user_id, data, portfolio_id)
@@ -610,15 +637,17 @@ async def sell_portfolio_asset_by_id(
 
 
 @router.get(
-    "/users/{user_id}/portfolios/{portfolio_id}/transactions",
+    "/users/me/portfolios/{portfolio_id}/transactions",
     response_model=TransactionListResponse,
 )
 async def get_portfolio_transactions_by_id(
-    user_id: int,
+    user: CurrentUser,
     portfolio_id: int,
     db: DbSession,
 ) -> TransactionListResponse:
     """Return transaction history for a selected owned portfolio."""
+
+    user_id = user.user_id
 
     try:
         return await read_transactions(db, user_id, portfolio_id)
@@ -627,14 +656,16 @@ async def get_portfolio_transactions_by_id(
 
 
 @router.get(
-    "/users/{user_id}/portfolio",
+    "/users/me/portfolio",
     response_model=PortfolioResponse,
 )
 async def get_user_portfolio(
-    user_id: int,
+    user: CurrentUser,
     db: DbSession,
 ) -> PortfolioResponse:
     """Legacy route; valid only while the user has at most one portfolio."""
+
+    user_id = user.user_id
 
     try:
         return await read_user_portfolio(db, user_id)
@@ -643,15 +674,17 @@ async def get_user_portfolio(
 
 
 @router.post(
-    "/users/{user_id}/portfolio/assets/buy",
+    "/users/me/portfolio/assets/buy",
     response_model=PortfolioResponse,
 )
 async def buy_portfolio_asset(
-    user_id: int,
+    user: CurrentUser,
     data: BuyAssetRequest,
     db: DbSession,
 ) -> PortfolioResponse:
     """Ajoute un achat simulé dans le portefeuille."""
+
+    user_id = user.user_id
 
     try:
         return await buy_asset(db, user_id, data)
@@ -660,15 +693,17 @@ async def buy_portfolio_asset(
 
 
 @router.post(
-    "/users/{user_id}/portfolio/assets/sell",
+    "/users/me/portfolio/assets/sell",
     response_model=PortfolioResponse,
 )
 async def sell_portfolio_asset(
-    user_id: int,
+    user: CurrentUser,
     data: SellAssetRequest,
     db: DbSession,
 ) -> PortfolioResponse:
     """Retire une quantité d'un actif du portefeuille."""
+
+    user_id = user.user_id
 
     try:
         return await sell_asset(db, user_id, data)
@@ -677,14 +712,16 @@ async def sell_portfolio_asset(
 
 
 @router.get(
-    "/users/{user_id}/portfolio/transactions",
+    "/users/me/portfolio/transactions",
     response_model=TransactionListResponse,
 )
 async def get_portfolio_transactions(
-    user_id: int,
+    user: CurrentUser,
     db: DbSession,
 ) -> TransactionListResponse:
     """Retourne l'historique des achats et des ventes."""
+
+    user_id = user.user_id
 
     try:
         return await read_transactions(db, user_id)

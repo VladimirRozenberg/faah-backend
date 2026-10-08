@@ -4,9 +4,10 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_, select
 
+from auth.login import get_current_user
 from db import DbSession
 from models import (
     Analysis,
@@ -25,7 +26,7 @@ from models import (
     SourceClassification,
 )
 
-router = APIRouter(prefix="/api", tags=["Data sources"])
+router = APIRouter(dependencies=[Depends(get_current_user)], prefix="/api", tags=["Data sources"])
 
 
 def _naive_utc(value: datetime | None) -> datetime | None:

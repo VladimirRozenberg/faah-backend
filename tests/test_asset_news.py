@@ -3,6 +3,7 @@ import unittest
 from datetime import datetime
 
 import httpx
+from auth.login import get_current_user
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -38,6 +39,7 @@ class AssetNewsTests(unittest.IsolatedAsyncioTestCase):
 
                 app = FastAPI()
                 app.include_router(router)
+                app.dependency_overrides[get_current_user] = lambda: None
                 async def test_db():
                     yield db
                 app.dependency_overrides[get_db] = test_db

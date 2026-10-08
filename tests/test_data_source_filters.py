@@ -2,6 +2,7 @@ import unittest
 from datetime import datetime
 
 import httpx
+from auth.login import get_current_user
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -145,6 +146,7 @@ class DataSourceFilterTests(unittest.IsolatedAsyncioTestCase):
 
                 app = FastAPI()
                 app.include_router(router)
+                app.dependency_overrides[get_current_user] = lambda: None
 
                 async def test_db():
                     yield db
@@ -202,6 +204,7 @@ class DataSourceFilterTests(unittest.IsolatedAsyncioTestCase):
     async def test_rejects_reversed_date_range(self):
         app = FastAPI()
         app.include_router(router)
+        app.dependency_overrides[get_current_user] = lambda: None
 
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),

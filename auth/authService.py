@@ -13,7 +13,7 @@ from schemas import TokenResponse, UserResponse
 
 TOKEN_HEX_KEY = os.getenv("hex_code")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 240
+ACCESS_TOKEN_EXPIRE_MINUTES = 1
 
 
 # ---------------------------------------------------------------------

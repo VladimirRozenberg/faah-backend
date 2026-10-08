@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx
+from auth.login import get_current_user
 from fastapi import FastAPI
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -164,6 +165,7 @@ class OrchestratorHistoryTests(unittest.IsolatedAsyncioTestCase):
                 .order_by(OrchestratorCycle.orc_started_at.desc()))).all())
         app = FastAPI()
         app.include_router(router)
+        app.dependency_overrides[get_current_user] = lambda: None
         async def override_db():
             async with self.sessions() as db:
                 yield db
@@ -216,6 +218,7 @@ class OrchestratorHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.memory.record_cycle(old)
         app = FastAPI()
         app.include_router(router)
+        app.dependency_overrides[get_current_user] = lambda: None
         async def override_db():
             async with self.sessions() as db:
                 yield db

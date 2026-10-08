@@ -1,6 +1,7 @@
 """Integration coverage for the user-to-portfolios one-to-many relationship."""
 
 import unittest
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
@@ -182,7 +183,7 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
                 "portfolio.repository.get_current_price",
                 new=AsyncMock(return_value=110.0),
             ):
-                result = await get_user_portfolios(user.usr_id, db)
+                result = await get_user_portfolios(SimpleNamespace(user_id=user.usr_id), db)
 
             self.assertEqual(result.count, 2)
             by_name = {item.name: item for item in result.items}
@@ -245,7 +246,7 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
             db.add(user)
             await db.commit()
 
-            result = await get_user_portfolios(user.usr_id, db)
+            result = await get_user_portfolios(SimpleNamespace(user_id=user.usr_id), db)
 
             self.assertEqual(result.model_dump(), {"count": 0, "items": []})
 
@@ -360,7 +361,7 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
             await db.commit()
 
             result = await get_user_recommendations(
-                owner.usr_id,
+                SimpleNamespace(user_id=owner.usr_id),
                 db,
                 within=None,
                 kind=None,
@@ -388,7 +389,7 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.items[0].recommendation_id, recommendations[3].prc_id)
 
             within_one_hour = await get_user_recommendations(
-                owner.usr_id,
+                SimpleNamespace(user_id=owner.usr_id),
                 db,
                 within="1h",
                 kind=None,
@@ -397,7 +398,7 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
                 page_size=20,
             )
             by_kind = await get_user_recommendations(
-                owner.usr_id,
+                SimpleNamespace(user_id=owner.usr_id),
                 db,
                 within=None,
                 kind="opportunity",
@@ -406,7 +407,7 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
                 page_size=20,
             )
             by_status = await get_user_recommendations(
-                owner.usr_id,
+                SimpleNamespace(user_id=owner.usr_id),
                 db,
                 within=None,
                 kind=None,
@@ -415,7 +416,7 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
                 page_size=20,
             )
             by_both = await get_user_recommendations(
-                owner.usr_id,
+                SimpleNamespace(user_id=owner.usr_id),
                 db,
                 within=None,
                 kind="opportunity",
@@ -424,7 +425,7 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
                 page_size=20,
             )
             second_user_page = await get_user_recommendations(
-                owner.usr_id,
+                SimpleNamespace(user_id=owner.usr_id),
                 db,
                 within=None,
                 kind=None,
@@ -433,7 +434,7 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
                 page_size=2,
             )
             second_page = await get_portfolio_recommendations(
-                owner.usr_id,
+                SimpleNamespace(user_id=owner.usr_id),
                 owned_portfolio.id,
                 db,
                 within=None,
@@ -464,7 +465,7 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([item.run_id for item in second_page.items], [2, 1])
             with self.assertRaises(HTTPException) as not_owned:
                 await get_portfolio_recommendations(
-                    owner.usr_id,
+                    SimpleNamespace(user_id=owner.usr_id),
                     other_portfolio.id,
                     db,
                     within=None,
@@ -479,7 +480,7 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
         async with self.session_factory() as db:
             with self.assertRaises(HTTPException) as missing:
                 await get_user_recommendations(
-                    999, db, within=None, kind=None, status_filter=None,
+                    SimpleNamespace(user_id=999), db, within=None, kind=None, status_filter=None,
                     page=1, page_size=20,
                 )
             self.assertEqual(missing.exception.status_code, 404)
@@ -495,7 +496,7 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
 
             with self.assertRaises(HTTPException) as disabled:
                 await get_user_recommendations(
-                    user.usr_id, db, within=None, kind=None, status_filter=None,
+                    SimpleNamespace(user_id=user.usr_id), db, within=None, kind=None, status_filter=None,
                     page=1, page_size=20,
                 )
             self.assertEqual(disabled.exception.status_code, 404)
@@ -511,7 +512,7 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
             db.add(user)
             await db.commit()
 
-            result = await get_user_available_cash(user.usr_id, db)
+            result = await get_user_available_cash(SimpleNamespace(user_id=user.usr_id), db)
 
             self.assertEqual(result.user_id, user.usr_id)
             self.assertEqual(result.currency, "USD")
@@ -522,7 +523,7 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
             for route in portfolio_router.routes
             if "GET" in getattr(route, "methods", set())
         }
-        self.assertIn("/api/users/{user_id}/available-cash", get_paths)
+        self.assertIn("/api/users/me/available-cash", get_paths)
 
     async def test_user_asset_value_aggregates_assets_across_portfolios(self):
         async with self.session_factory() as db:
@@ -750,17 +751,17 @@ class MultiplePortfolioTests(unittest.IsolatedAsyncioTestCase):
             if "POST" in getattr(route, "methods", set())
         }
         self.assertIn(
-            "/api/users/{user_id}/portfolio/create",
+            "/api/users/me/portfolio/create",
             post_paths,
         )
-        self.assertNotIn("/api/users/{user_id}/portfolios", post_paths)
+        self.assertNotIn("/api/users/me/portfolios", post_paths)
         get_paths = {
             route.path
             for route in portfolio_router.routes
             if "GET" in getattr(route, "methods", set())
         }
-        self.assertIn("/api/users/{user_id}/portfolios", get_paths)
-        self.assertIn("/api/users/{user_id}/asset-value", get_paths)
+        self.assertIn("/api/users/me/portfolios", get_paths)
+        self.assertIn("/api/users/me/asset-value", get_paths)
         niche_paths = {
             route.path
             for route in asset_router.routes
