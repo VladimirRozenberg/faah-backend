@@ -13,6 +13,7 @@ from assets.market_data import get_market_asset
 from live_market.redis_client import get_latest_quote
 from models import (
     Asset,
+    Deposit,
     Niche,
     Portfolio,
     PortfolioAsset,
@@ -24,6 +25,7 @@ from models import (
 )
 from portfolio.schemas import (
     BuyAssetRequest,
+    DepositResponse,
     PortfolioCreateRequest,
     PortfolioPositionResponse,
     PortfolioResponse,
@@ -35,6 +37,7 @@ from portfolio.schemas import (
     TransactionResponse,
     UserTransactionListResponse,
     UserTransactionResponse,
+    UserDepositListResponse,
     UserAvailableCashResponse,
     UserAssetValueItem,
     UserAssetValueResponse,
@@ -908,9 +911,57 @@ async def execution_price(asset: Asset) -> Decimal:
     return value.quantize(Decimal("0.00000001"))
 
 
-async def deposit_cash(db, user_id, amount):
-    """Add simulated funds directly to the user's balance."""
-    account = await get_active_account(db, user_id)
+async def read_user_deposits(
+    db: AsyncSession,
+    user_id: int,
+    page: int = 1,
+) -> UserDepositListResponse:
+    """Return ten account deposits per page, newest first."""
+
+    await get_active_account(db, user_id)
+    page_size = 10
+    count = await db.scalar(
+        select(func.count(Deposit.dep_id)).where(Deposit.dep_usr_id == user_id)
+    ) or 0
+    deposits = await db.scalars(
+        select(Deposit)
+        .where(Deposit.dep_usr_id == user_id)
+        .order_by(Deposit.dep_created_at.desc(), Deposit.dep_id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    return UserDepositListResponse(
+        count=count,
+        page=page,
+        total_pages=(count + page_size - 1) // page_size,
+        deposits=[DepositResponse(
+            id=item.dep_id,
+            amount=float(item.dep_amount),
+            currency=item.dep_currency,
+            created_at=item.dep_created_at,
+        ) for item in deposits],
+    )
+
+
+async def deposit_cash(
+    db: AsyncSession,
+    user_id: int,
+    amount: Decimal,
+    *,
+    admin_user_id: int,
+):
+    """Commit the deposit audit record and balance increase together."""
+    account = await db.scalar(
+        select(User).where(User.usr_id == user_id).with_for_update()
+    )
+    if account is None or not account.usr_is_active:
+        raise LookupError("User not found or disabled.")
     account.usr_balance += amount
+    db.add(Deposit(
+        dep_usr_id=user_id,
+        dep_admin_usr_id=admin_user_id,
+        dep_amount=amount,
+        dep_currency="USD",
+    ))
     await db.commit()
     return {"balance": float(account.usr_balance), "currency": "USD", "simulation": True}

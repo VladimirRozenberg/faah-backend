@@ -123,9 +123,8 @@ class DepositRequest(BaseModel):
 @router.post("/utilisateurs/{user_id}/deposit")
 async def recharge_compte(user_id: int, data: DepositRequest, db: DbSession, admin: UserResponse = AdminUser):
     try:
-        return await deposit_cash(db, user_id, data.amount)
+        return await deposit_cash(db, user_id, data.amount, admin_user_id=admin.user_id)
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-

@@ -24,6 +24,7 @@ from portfolio.repository import (
     read_user_asset_value,
     read_user_portfolio,
     read_user_transactions,
+    read_user_deposits,
     sell_asset,
     update_user_portfolio,
 )
@@ -38,6 +39,7 @@ from portfolio.schemas import (
     UserAvailableCashResponse,
     UserAssetValueResponse,
     UserTransactionListResponse,
+    UserDepositListResponse,
 )
 from portfolio_strategist.repository import (
     StrategistRepository,
@@ -635,6 +637,23 @@ async def sell_portfolio_asset_by_id(
     try:
         return await sell_asset(db, user_id, data, portfolio_id)
     except (LookupError, ValueError) as error:
+        raise create_http_error(error) from error
+
+
+@router.get(
+    "/users/me/deposits",
+    response_model=UserDepositListResponse,
+)
+async def get_user_deposits(
+    user: CurrentUser,
+    db: DbSession,
+    page: int = Query(default=1, ge=1),
+) -> UserDepositListResponse:
+    """Return deposit history belonging to the authenticated account."""
+
+    try:
+        return await read_user_deposits(db, user.user_id, page)
+    except LookupError as error:
         raise create_http_error(error) from error
 
 

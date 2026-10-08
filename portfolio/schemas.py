@@ -124,6 +124,23 @@ class TransactionResponse(BaseModel):
     created_at: datetime
 
 
+class DepositResponse(BaseModel):
+    """A deposit into the authenticated user's account."""
+
+    id: int
+    amount: float
+    currency: str
+    created_at: datetime
+
+
+class UserDepositListResponse(BaseModel):
+    count: int
+    page: int
+    page_size: Literal[10] = 10
+    total_pages: int
+    deposits: list[DepositResponse]
+
+
 class UserTransactionResponse(TransactionResponse):
     """A transaction with its owning portfolio identified."""
 

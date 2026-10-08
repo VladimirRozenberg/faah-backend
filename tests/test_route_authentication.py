@@ -10,12 +10,15 @@ import httpx
 import jwt
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from admin.gestion import router as admin_router
 from auth.authService import auth_service
 from auth.login import router as auth_router
 from db import Base, get_db
-from models import Asset, Portfolio, PortfolioStrategist, Transaction, User
+from models import Asset, Deposit, Portfolio, PortfolioStrategist, Transaction, User
+from portfolio.repository import deposit_cash
 from routers import assets, data_sources, favorites, health, orchestrator, portfolios
 
 
@@ -29,7 +32,7 @@ class RouteAuthenticationTests(unittest.IsolatedAsyncioTestCase):
         async with self.engine.begin() as connection:
             await connection.run_sync(lambda c: Base.metadata.create_all(
                 c, tables=[User.__table__, Asset.__table__, Portfolio.__table__,
-                           PortfolioStrategist.__table__, Transaction.__table__],
+                           PortfolioStrategist.__table__, Transaction.__table__, Deposit.__table__],
             ))
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
         async with self.sessions() as db:
@@ -151,6 +154,19 @@ class RouteAuthenticationTests(unittest.IsolatedAsyncioTestCase):
         async with self.sessions() as db:
             self.assertEqual((await db.get(User, self.user_ids['bob'])).usr_balance, 910)
             self.assertEqual((await db.get(User, self.user_ids['admin'])).usr_balance, 0)
+            deposit = await db.scalar(select(Deposit))
+            self.assertEqual(deposit.dep_usr_id, self.user_ids['bob'])
+            self.assertEqual(deposit.dep_admin_usr_id, self.user_ids['admin'])
+            self.assertEqual(deposit.dep_amount, 10)
+        response = await self.client.get('/api/users/me/deposits', headers=self.headers('bob'))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['count'], 1)
+        item = response.json()['deposits'][0]
+        self.assertEqual(item['amount'], 10)
+        self.assertEqual(item['currency'], 'USD')
+        self.assertEqual(set(item), {'id', 'amount', 'currency', 'created_at'})
+        response = await self.client.get('/api/users/me/deposits', headers=self.headers('admin'))
+        self.assertEqual(response.json()['count'], 0)
 
     async def test_valid_token_allows_shared_routes_and_disabled_account_is_rejected(self):
         response = await self.client.get('/api/history-options', headers=self.headers())
@@ -257,6 +273,63 @@ class RouteAuthenticationTests(unittest.IsolatedAsyncioTestCase):
         for page in ('0', '-1', 'abc'):
             response = await self.client.get(path + f'?page={page}', headers=self.headers())
             self.assertEqual(response.status_code, 422, response.text)
+
+    async def test_user_deposits_paginate_and_only_show_the_authenticated_account(self):
+        path = '/api/users/me/deposits'
+        response = await self.client.get(path, headers=self.headers())
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {'count': 0, 'page': 1, 'page_size': 10,
+                                           'total_pages': 0, 'deposits': []})
+        async with self.sessions() as db:
+            now = datetime.now(timezone.utc)
+            deposits = [Deposit(
+                dep_usr_id=self.user_ids['alice'], dep_admin_usr_id=self.user_ids['admin'],
+                dep_amount=Decimal(index + 1), dep_created_at=now,
+            ) for index in range(23)]
+            db.add_all(deposits)
+            db.add(Deposit(
+                dep_usr_id=self.user_ids['bob'], dep_admin_usr_id=self.user_ids['admin'],
+                dep_amount=Decimal('900'), dep_created_at=now + timedelta(days=1),
+            ))
+            await db.commit()
+            expected_ids = sorted((item.dep_id for item in deposits), reverse=True)
+        actual_ids = []
+        for page, expected_length in [(1, 10), (2, 10), (3, 3), (4, 0)]:
+            response = await self.client.get(path + f'?page={page}&uid=2&user_id=2',
+                                             headers=self.headers())
+            self.assertEqual(response.status_code, 200, response.text)
+            body = response.json()
+            self.assertEqual(body['count'], 23)
+            self.assertEqual(body['page'], page)
+            self.assertEqual(body['page_size'], 10)
+            self.assertEqual(body['total_pages'], 3)
+            self.assertEqual(len(body['deposits']), expected_length)
+            actual_ids.extend(item['id'] for item in body['deposits'])
+        self.assertEqual(actual_ids, expected_ids)
+        response = await self.client.get(path, headers=self.headers('bob'))
+        self.assertEqual(response.json()['count'], 1)
+        self.assertEqual(response.json()['deposits'][0]['amount'], 900)
+        for page in ('0', '-1', 'abc'):
+            response = await self.client.get(path + f'?page={page}', headers=self.headers())
+            self.assertEqual(response.status_code, 422, response.text)
+
+    async def test_user_deposits_require_a_valid_active_account_token(self):
+        for headers, expected in [({}, 403), ({'Authorization': 'Bearer invalid'}, 401),
+                                  (self.headers(exp=int(time.time()) - 1), 401),
+                                  (self.headers('disabled'), 401)]:
+            response = await self.client.get('/api/users/me/deposits', headers=headers)
+            self.assertEqual(response.status_code, expected, response.text)
+
+    async def test_failed_deposit_record_rolls_back_the_balance_change(self):
+        # The HTTP schema rejects negative amounts; exercise the DB constraint too.
+        async with self.sessions() as db:
+            with self.assertRaises(IntegrityError):
+                await deposit_cash(db, self.user_ids['alice'], Decimal('-10'),
+                                   admin_user_id=self.user_ids['admin'])
+            await db.rollback()
+            account = await db.get(User, self.user_ids['alice'])
+            self.assertEqual(account.usr_balance, 100)
+            self.assertEqual(await db.scalar(select(func.count(Deposit.dep_id))), 0)
 
     async def test_user_transactions_require_a_valid_active_account_token(self):
         for headers, expected in [({}, 403), ({'Authorization': 'Bearer invalid'}, 401),

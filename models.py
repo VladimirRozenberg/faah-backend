@@ -471,6 +471,28 @@ class PortfolioAsset(Base):
 # TRANSACTIONS
 # ============================================================
 
+class Deposit(Base):
+    """Audit record for an administrator's simulated account deposit."""
+
+    __tablename__ = "deposits"
+    __table_args__ = (
+        CheckConstraint("dep_amount > 0", name="chk_deposit_amount"),
+        CheckConstraint("dep_currency = 'USD'", name="chk_deposit_currency"),
+        Index("idx_deposits_user_created", "dep_usr_id", "dep_created_at"),
+    )
+
+    dep_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dep_usr_id: Mapped[int] = mapped_column(ForeignKey("users.usr_id"), nullable=False)
+    dep_admin_usr_id: Mapped[int] = mapped_column(ForeignKey("users.usr_id"), nullable=False)
+    dep_amount: Mapped[Decimal] = mapped_column(Numeric(24, 8), nullable=False)
+    dep_currency: Mapped[str] = mapped_column(
+        String(10), default="USD", server_default="USD", nullable=False,
+    )
+    dep_created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+
 class Transaction(Base):
     """Un achat ou une vente effectué dans un portefeuille."""
 

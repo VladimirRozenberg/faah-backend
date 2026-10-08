@@ -27,6 +27,7 @@ checks that it belongs to the authenticated user.
 | GET | `/api/users/me/portfolio` |
 | GET | `/api/users/me/portfolios/{pid}/transactions` |
 | GET | `/api/users/me/transactions` (all owned portfolios, newest first) |
+| GET | `/api/users/me/deposits` (account deposit history, newest first) |
 | GET | `/api/users/me/portfolios/{pid}/recommendations` |
 | GET | `/api/users/me/recommendations` |
 | GET | `/api/users/me/available-cash` |
@@ -83,6 +84,30 @@ acting administrator's ID comes from the token.
 | PUT | `/admin/utilisateurs/{id}/statut` |
 | POST | `/admin/utilisateurs/{id}/deposit` |
 | POST | `/admin/utilisateurs` (create a user) |
+
+To add simulated funds, use the existing
+`POST /admin/utilisateurs/{id}/deposit` with an admin bearer token and
+`{"amount": 100}`. It returns `{"balance": ..., "currency": "USD", "simulation": true}`.
+Deposits update the target user's account balance and record the amount, timestamp,
+target account, and acting admin. The balance update and audit record commit together.
+Deposits are not included in `/api/users/me/transactions`, which lists buys and sells.
+
+For deposit history, call `GET /api/users/me/deposits?page=1` with the user's bearer
+token. It returns `{"count": ..., "page": 1, "page_size": 10, "total_pages": ..., "deposits": [...]}`.
+Each deposit has `id`, `amount`, `currency`, and `created_at`. Pages start at 1
+and have a fixed size of 10. `count` is the total number of owned deposits;
+out-of-range pages return an empty list. The acting admin is stored for auditing
+and is not returned in the user's history.
+
+Before deploying this update to an existing database, apply:
+
+```sh
+psql -v ON_ERROR_STOP=1 -f migrations/20261008_record_deposits.sql
+```
+
+Only future deposits are recorded. Old deposits were not stored and cannot be
+reconstructed reliably from the current balance. Use this incremental migration
+for existing databases; the full schema also includes the table for fresh installs.
 
 The backend password route is PUT. The Avalonia files `SettingsView.axaml.cs`,
 `AssetListViewModel`, and `UserCreateViewModel` are absent from this workspace, so
