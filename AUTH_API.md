@@ -49,6 +49,25 @@ an empty list while retaining the total count. Each item has the existing transa
 `portfolio_id` and `portfolio_name`. It includes history from paused portfolios.
 Users with no transactions receive `count: 0`, `total_pages: 0`, and an empty list.
 
+Additional pagination defaults:
+
+| Endpoint | Default `page_size` | Result list |
+| --- | --- | --- |
+| `/api/assets/{symbol}/news` | 10 | `items` |
+| `/api/users/me/portfolios/{pid}/transactions` | 20 | `transactions` |
+| `/api/users/me/recommendations` | 10 | `items` |
+
+All three accept `page` (default 1, minimum 1) and `page_size` (1 through 100).
+Explicit page sizes such as 20, 50, or 100 override the defaults. News and portfolio
+transactions return `count` (total matching records), `page`, `page_size`, and
+`total_pages`. Portfolio `by_asset` summaries cover the complete owned portfolio
+history, not just the current page. The legacy singular
+`/api/users/me/portfolio/transactions` response remains unchanged.
+
+`PUT /auth/me/password` requires `new_password` to contain at least 8 characters
+and at least one digit (`0` through `9`), with the existing 72-byte maximum.
+Invalid passwords return 422 and leave the existing password unchanged.
+
 ## Shared routes requiring a valid token
 
 | Method | Path |

@@ -139,6 +139,8 @@ class UpdatePasswordRequest(BaseModel):
     def validate_password_bytes(cls, value: str) -> str:
         if len(value.encode("utf-8")) > 72:
             raise ValueError("Le mot de passe ne doit pas dépasser 72 octets.")
+        if not any(character in "0123456789" for character in value):
+            raise ValueError("Le mot de passe doit contenir au moins un chiffre.")
         return value
 
 

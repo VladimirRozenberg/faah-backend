@@ -53,8 +53,39 @@ class AssetNewsTests(unittest.IsolatedAsyncioTestCase):
                     response = await client.get("/api/assets/AAPL/news")
                     self.assertEqual([n["src_id"] for n in response.json()["items"]], [unrelated.src_id])
                     response = await client.get("/api/assets/EMPTY/news")
-                    self.assertEqual(response.json(), {"count": 0, "items": []})
+                    self.assertEqual(response.json(), {"count": 0, "page": 1, "page_size": 10,
+                                                       "total_pages": 0, "items": []})
                     response = await client.get("/api/assets/UNKNOWN/news")
                     self.assertEqual(response.status_code, 404)
+
+                    # Enough linked sources to exercise the default and later pages.
+                    extra_sources = []
+                    for index in range(11):
+                        source = DataSource(src_type="news", src_title=f"Linked news {index}",
+                                            src_created_at=datetime(2026, 10, 1))
+                        db.add(source)
+                        await db.flush()
+                        classification = SourceClassification(cls_src_id=source.src_id,
+                            cls_prm_id=prompt.prm_id, cls_should_trigger=True)
+                        db.add(classification)
+                        await db.flush()
+                        db.add(ClassificationAsset(cla_cls_id=classification.cls_id, cla_ast_id=hwm.ast_id))
+                        extra_sources.append(source)
+                    await db.commit()
+                    expected_ids = [source.src_id for source in reversed(extra_sources)] + [newer.src_id, linked.src_id]
+                    actual_ids = []
+                    for page, length in [(1, 10), (2, 3), (3, 0)]:
+                        response = await client.get(f"/api/assets/HWM/news?page={page}")
+                        self.assertEqual(response.status_code, 200, response.text)
+                        body = response.json()
+                        self.assertEqual(body["count"], 13)  # Duplicate classifications don't inflate totals.
+                        self.assertEqual(body["page_size"], 10)
+                        self.assertEqual(body["total_pages"], 2)
+                        self.assertEqual(len(body["items"]), length)
+                        actual_ids.extend(item["src_id"] for item in body["items"])
+                    self.assertEqual(actual_ids, expected_ids)
+                    for query in ("page=0", "page_size=0", "page_size=101"):
+                        response = await client.get("/api/assets/HWM/news?" + query)
+                        self.assertEqual(response.status_code, 422)
         finally:
             await engine.dispose()

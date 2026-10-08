@@ -34,6 +34,7 @@ from portfolio.schemas import (
     PortfolioResponse,
     PortfolioSummaryListResponse,
     PortfolioUpdateRequest,
+    PortfolioTransactionPageResponse,
     SellAssetRequest,
     TransactionListResponse,
     UserAvailableCashResponse,
@@ -244,7 +245,7 @@ async def get_user_recommendations(
         alias="status",
     ),
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    page_size: int = Query(default=10, ge=1, le=100),
 ) -> UserRecommendationPageResponse:
     """Return a filtered page of recommendations across the user's portfolios."""
 
@@ -676,19 +677,21 @@ async def get_user_transactions(
 
 @router.get(
     "/users/me/portfolios/{portfolio_id}/transactions",
-    response_model=TransactionListResponse,
+    response_model=PortfolioTransactionPageResponse,
 )
 async def get_portfolio_transactions_by_id(
     user: CurrentUser,
     portfolio_id: int,
     db: DbSession,
-) -> TransactionListResponse:
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> PortfolioTransactionPageResponse:
     """Return transaction history for a selected owned portfolio."""
 
     user_id = user.user_id
 
     try:
-        return await read_transactions(db, user_id, portfolio_id)
+        return await read_transactions(db, user_id, portfolio_id, page=page, page_size=page_size)
     except LookupError as error:
         raise create_http_error(error) from error
 

@@ -32,6 +32,7 @@ from portfolio.schemas import (
     PortfolioSummaryItem,
     PortfolioSummaryListResponse,
     PortfolioUpdateRequest,
+    PortfolioTransactionPageResponse,
     SellAssetRequest,
     TransactionListResponse,
     TransactionResponse,
@@ -854,18 +855,28 @@ async def read_transactions(
     db: AsyncSession,
     user_id: int,
     portfolio_id: int | None = None,
-) -> TransactionListResponse:
+    *,
+    page: int = 1,
+    page_size: int | None = None,
+) -> TransactionListResponse | PortfolioTransactionPageResponse:
     """Retourne l'historique des achats et des ventes."""
 
     portfolio = await get_user_portfolio(db, user_id, portfolio_id)
 
-    result = await db.execute(
+    count = await db.scalar(
+        select(func.count(Transaction.id_trans))
+        .where(Transaction.prt_id_trans == portfolio.prt_id)
+    ) or 0
+    statement = (
         select(Transaction, Asset)
         # La jointure ajoute le symbole et le nom de l'actif à chaque opération.
         .join(Asset, Asset.ast_id == Transaction.ast_id_trans)
         .where(Transaction.prt_id_trans == portfolio.prt_id)
-        .order_by(Transaction.createdAt_trans.desc())  # Les plus récentes d'abord.
+        .order_by(Transaction.createdAt_trans.desc(), Transaction.id_trans.desc())
     )
+    if page_size is not None:
+        statement = statement.offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(statement)
 
     transactions = [
         _transaction_response(transaction, asset)
@@ -885,8 +896,16 @@ async def read_transactions(
     by_asset = [AssetTransactionSummary(asset_id=row.ast_id, symbol=row.ast_symbol,
         name=row.ast_name, transaction_count=row.transaction_count,
         buy_count=row.buy_count, sell_count=row.sell_count) for row in grouped]
-    transactions.sort(key=lambda item: item.created_at.timestamp(), reverse=True)
     await db.commit()
+    if page_size is not None:
+        return PortfolioTransactionPageResponse(
+            count=count,
+            page=page,
+            page_size=page_size,
+            total_pages=(count + page_size - 1) // page_size,
+            transactions=transactions,
+            by_asset=by_asset,
+        )
     return TransactionListResponse(
         count=len(transactions),
         transactions=transactions,

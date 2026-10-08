@@ -486,22 +486,40 @@ def history_options() -> dict[str, list[str]]:
 
 
 @router.get("/assets/{symbol}/news", dependencies=[Depends(get_current_user)])
-async def get_asset_news(symbol: str, db: DbSession) -> dict:
+async def get_asset_news(
+    symbol: str,
+    db: DbSession,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+) -> dict:
     """Actualités liées à l'actif par une classification enregistrée en base."""
     asset = await find_asset_or_404(db, symbol)
 
     # Suivre les liens en base, sans rechercher le nom de l'actif dans le texte.
     # DISTINCT évite les doublons si une actualité a plusieurs classifications.
-    result = await db.execute(
-        select(*DataSource.__table__.c)
+    linked_sources = (
+        select(DataSource.src_id)
         .join(SourceClassification, SourceClassification.cls_src_id == DataSource.src_id)
         .join(ClassificationAsset, ClassificationAsset.cla_cls_id == SourceClassification.cls_id)
         .where(ClassificationAsset.cla_ast_id == asset.ast_id)
         .distinct()
+    )
+    count = await db.scalar(select(func.count()).select_from(linked_sources.subquery())) or 0
+    result = await db.execute(
+        select(*DataSource.__table__.c)
+        .where(DataSource.src_id.in_(linked_sources))
         .order_by(DataSource.src_created_at.desc(), DataSource.src_id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     )
     items = [dict(row) for row in result.mappings().all()]
-    return {"count": len(items), "items": items}
+    return {
+        "count": count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (count + page_size - 1) // page_size,
+        "items": items,
+    }
 
 
 @router.get("/assets/{symbol}/logo", response_class=Response)

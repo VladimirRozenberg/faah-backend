@@ -176,6 +176,12 @@ class TransactionListResponse(BaseModel):
     by_asset: list[AssetTransactionSummary]
 
 
+class PortfolioTransactionPageResponse(TransactionListResponse):
+    page: int
+    page_size: int
+    total_pages: int
+
+
 class PortfolioPositionResponse(BaseModel):
     """Un actif possédé dans un portefeuille."""
 

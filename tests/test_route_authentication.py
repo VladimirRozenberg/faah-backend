@@ -275,6 +275,62 @@ class RouteAuthenticationTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.get(path + f'?page={page}', headers=self.headers())
             self.assertEqual(response.status_code, 422, response.text)
 
+    async def test_portfolio_transactions_default_to_twenty_and_paginate_owned_history(self):
+        async with self.sessions() as db:
+            asset = Asset(ast_symbol='PAGE', ast_name='Pagination asset', ast_type='stock')
+            portfolio = Portfolio(prt_usr_id=self.user_ids['alice'], prt_name='History')
+            db.add_all([asset, portfolio])
+            await db.flush()
+            now = datetime.now(timezone.utc)
+            transactions = [Transaction(
+                prt_id_trans=portfolio.prt_id, ast_id_trans=asset.ast_id,
+                type_trans='buy', quantity_trans=Decimal('1'), price_trans=Decimal('10'),
+                createdAt_trans=now,
+            ) for _ in range(25)]
+            db.add_all(transactions)
+            db.add(Transaction(prt_id_trans=self.other_portfolio_id, ast_id_trans=asset.ast_id,
+                               type_trans='sell', quantity_trans=Decimal('1'),
+                               price_trans=Decimal('10'), createdAt_trans=now + timedelta(days=1)))
+            await db.commit()
+            expected_ids = sorted((item.id_trans for item in transactions), reverse=True)
+            portfolio_id = portfolio.prt_id
+        path = f'/api/users/me/portfolios/{portfolio_id}/transactions'
+        actual_ids = []
+        for query, page, length in [('', 1, 20), ('?page=2', 2, 5), ('?page=3', 3, 0)]:
+            response = await self.client.get(path + query, headers=self.headers())
+            self.assertEqual(response.status_code, 200, response.text)
+            body = response.json()
+            self.assertEqual(body['count'], 25)
+            self.assertEqual(body['page'], page)
+            self.assertEqual(body['page_size'], 20)
+            self.assertEqual(body['total_pages'], 2)
+            self.assertEqual(len(body['transactions']), length)
+            self.assertEqual(body['by_asset'][0]['transaction_count'], 25)
+            actual_ids.extend(item['id'] for item in body['transactions'])
+        self.assertEqual(actual_ids, expected_ids)
+        response = await self.client.get(path + '?page_size=10', headers=self.headers())
+        self.assertEqual(len(response.json()['transactions']), 10)
+        for query in ('page=0', 'page_size=0', 'page_size=101'):
+            response = await self.client.get(path + '?' + query, headers=self.headers())
+            self.assertEqual(response.status_code, 422)
+        response = await self.client.get(path, headers=self.headers('bob'))
+        self.assertEqual(response.status_code, 404)
+
+    async def test_password_update_requires_eight_characters_and_a_digit(self):
+        path = '/auth/me/password'
+        for password in ('abcdefg', 'abcdefgh', '1234567', 'é' * 36 + '1'):
+            response = await self.client.put(path, headers=self.headers(), json={'new_password': password})
+            self.assertEqual(response.status_code, 422, response.text)
+        async with self.sessions() as db:
+            user = await db.get(User, self.user_ids['alice'])
+            self.assertTrue(auth_service._verify_password('password123', user.usr_password_hash))
+        response = await self.client.put(path, headers=self.headers(), json={'new_password': 'abcdefg1'})
+        self.assertEqual(response.status_code, 204, response.text)
+        response = await self.client.post('/auth/login', json={'username': 'alice', 'password': 'abcdefg1'})
+        self.assertEqual(response.status_code, 200, response.text)
+        response = await self.client.post('/auth/login', json={'username': 'alice', 'password': 'password123'})
+        self.assertEqual(response.status_code, 401, response.text)
+
     async def test_user_deposits_paginate_and_only_show_the_authenticated_account(self):
         path = '/api/users/me/deposits'
         response = await self.client.get(path, headers=self.headers())
