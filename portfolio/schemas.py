@@ -124,6 +124,20 @@ class TransactionResponse(BaseModel):
     created_at: datetime
 
 
+class UserTransactionResponse(TransactionResponse):
+    """A transaction with its owning portfolio identified."""
+
+    portfolio_id: int
+    portfolio_name: str
+
+
+class UserTransactionListResponse(BaseModel):
+    """All transactions across the authenticated user's portfolios."""
+
+    count: int
+    transactions: list[UserTransactionResponse]
+
+
 class AssetTransactionSummary(BaseModel):
     asset_id: int
     symbol: str

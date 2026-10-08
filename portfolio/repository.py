@@ -33,6 +33,8 @@ from portfolio.schemas import (
     SellAssetRequest,
     TransactionListResponse,
     TransactionResponse,
+    UserTransactionListResponse,
+    UserTransactionResponse,
     UserAvailableCashResponse,
     UserAssetValueItem,
     UserAssetValueResponse,
@@ -790,6 +792,46 @@ async def read_user_portfolio(
     return response
 
 
+def _transaction_response(transaction: Transaction, asset: Asset) -> TransactionResponse:
+    return TransactionResponse(
+        id=transaction.id_trans,
+        symbol=asset.ast_symbol,
+        name=asset.ast_name,
+        type=transaction.type_trans,
+        quantity=float(transaction.quantity_trans),
+        price=float(transaction.price_trans),
+        fees=float(transaction.fees_trans),
+        currency=transaction.currency_trans,
+        amount=round_value(transaction.quantity_trans * transaction.price_trans),
+        created_at=transaction.createdAt_trans,
+    )
+
+
+async def read_user_transactions(
+    db: AsyncSession,
+    user_id: int,
+) -> UserTransactionListResponse:
+    """Read all owned transaction history without creating a default portfolio."""
+
+    await get_active_account(db, user_id)
+    rows = await db.execute(
+        select(Transaction, Asset, Portfolio)
+        .join(Asset, Asset.ast_id == Transaction.ast_id_trans)
+        .join(Portfolio, Portfolio.prt_id == Transaction.prt_id_trans)
+        .where(Portfolio.prt_usr_id == user_id)
+        .order_by(Transaction.createdAt_trans.desc(), Transaction.id_trans.desc())
+    )
+    transactions = [
+        UserTransactionResponse(
+            **_transaction_response(transaction, asset).model_dump(),
+            portfolio_id=portfolio.prt_id,
+            portfolio_name=portfolio.prt_name,
+        )
+        for transaction, asset, portfolio in rows.all()
+    ]
+    return UserTransactionListResponse(count=len(transactions), transactions=transactions)
+
+
 async def read_transactions(
     db: AsyncSession,
     user_id: int,
@@ -807,25 +849,10 @@ async def read_transactions(
         .order_by(Transaction.createdAt_trans.desc())  # Les plus récentes d'abord.
     )
 
-    transactions = []
-
-    for transaction, asset in result.all():
-        amount = transaction.quantity_trans * transaction.price_trans
-
-        transactions.append(
-            TransactionResponse(
-                id=transaction.id_trans,
-                symbol=asset.ast_symbol,
-                name=asset.ast_name,
-                type=transaction.type_trans,
-                quantity=float(transaction.quantity_trans),
-                price=float(transaction.price_trans),
-                fees=float(transaction.fees_trans),
-                currency=transaction.currency_trans,
-                amount=round_value(amount),
-                created_at=transaction.createdAt_trans,
-            )
-        )
+    transactions = [
+        _transaction_response(transaction, asset)
+        for transaction, asset in result.all()
+    ]
 
     grouped = await db.execute(
         select(Asset.ast_id, Asset.ast_symbol, Asset.ast_name,

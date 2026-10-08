@@ -26,6 +26,7 @@ checks that it belongs to the authenticated user.
 | POST | `/api/users/me/portfolio/create` |
 | GET | `/api/users/me/portfolio` |
 | GET | `/api/users/me/portfolios/{pid}/transactions` |
+| GET | `/api/users/me/transactions` (all owned portfolios, newest first) |
 | GET | `/api/users/me/portfolios/{pid}/recommendations` |
 | GET | `/api/users/me/recommendations` |
 | GET | `/api/users/me/available-cash` |
@@ -37,6 +38,12 @@ Related personal routes follow the same rule:
 `/api/users/me/portfolio/assets/buy`, `/api/users/me/portfolio/assets/sell`, and
 `/api/users/me/portfolio/transactions`, as well as portfolio `/strategist` and
 `/strategist/reviews` (GET/POST).
+
+`GET /api/users/me/transactions` returns `{"count": ..., "transactions": [...]}`
+without pagination. Each item has the existing transaction fields (`id`, `symbol`,
+`name`, `type`, `quantity`, `price`, `fees`, `currency`, `amount`, `created_at`) plus
+`portfolio_id` and `portfolio_name`. It includes history from paused portfolios.
+Users with no transactions receive `{"count": 0, "transactions": []}`.
 
 ## Shared routes requiring a valid token
 

@@ -23,6 +23,7 @@ from portfolio.repository import (
     read_user_available_cash,
     read_user_asset_value,
     read_user_portfolio,
+    read_user_transactions,
     sell_asset,
     update_user_portfolio,
 )
@@ -36,6 +37,7 @@ from portfolio.schemas import (
     TransactionListResponse,
     UserAvailableCashResponse,
     UserAssetValueResponse,
+    UserTransactionListResponse,
 )
 from portfolio_strategist.repository import (
     StrategistRepository,
@@ -633,6 +635,22 @@ async def sell_portfolio_asset_by_id(
     try:
         return await sell_asset(db, user_id, data, portfolio_id)
     except (LookupError, ValueError) as error:
+        raise create_http_error(error) from error
+
+
+@router.get(
+    "/users/me/transactions",
+    response_model=UserTransactionListResponse,
+)
+async def get_user_transactions(
+    user: CurrentUser,
+    db: DbSession,
+) -> UserTransactionListResponse:
+    """Return every transaction across the authenticated user's portfolios."""
+
+    try:
+        return await read_user_transactions(db, user.user_id)
+    except LookupError as error:
         raise create_http_error(error) from error
 
 

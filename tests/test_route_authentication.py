@@ -2,6 +2,8 @@
 
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from unittest.mock import patch
 
 import httpx
@@ -13,7 +15,7 @@ from admin.gestion import router as admin_router
 from auth.authService import auth_service
 from auth.login import router as auth_router
 from db import Base, get_db
-from models import Portfolio, PortfolioStrategist, User
+from models import Asset, Portfolio, PortfolioStrategist, Transaction, User
 from routers import assets, data_sources, favorites, health, orchestrator, portfolios
 
 
@@ -26,7 +28,8 @@ class RouteAuthenticationTests(unittest.IsolatedAsyncioTestCase):
         self.engine = create_async_engine('sqlite+aiosqlite:///:memory:')
         async with self.engine.begin() as connection:
             await connection.run_sync(lambda c: Base.metadata.create_all(
-                c, tables=[User.__table__, Portfolio.__table__, PortfolioStrategist.__table__],
+                c, tables=[User.__table__, Asset.__table__, Portfolio.__table__,
+                           PortfolioStrategist.__table__, Transaction.__table__],
             ))
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
         async with self.sessions() as db:
@@ -154,3 +157,69 @@ class RouteAuthenticationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         response = await self.client.get('/auth/me', headers=self.headers('disabled'))
         self.assertEqual(response.status_code, 401)
+
+    async def test_user_transactions_include_all_owned_portfolios_and_exclude_other_users(self):
+        path = '/api/users/me/transactions'
+        response = await self.client.get(path, headers=self.headers())
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {'count': 0, 'transactions': []})
+
+        async with self.sessions() as db:
+            asset = Asset(ast_symbol='AAPL', ast_name='Apple', ast_type='stock')
+            active = Portfolio(prt_usr_id=self.user_ids['alice'], prt_name='Active')
+            paused = Portfolio(prt_usr_id=self.user_ids['alice'], prt_name='Paused', prt_is_active=False)
+            db.add_all([asset, active, paused])
+            await db.flush()
+            now = datetime.now(timezone.utc)
+            transactions = []
+            for portfolio_id, kind, quantity, created_at in [
+                (active.prt_id, 'buy', 2, now - timedelta(days=1)),
+                (paused.prt_id, 'sell', 1, now),
+                (active.prt_id, 'buy', 3, now),
+                (self.other_portfolio_id, 'buy', 99, now + timedelta(days=1)),
+            ]:
+                transactions.append(Transaction(
+                    prt_id_trans=portfolio_id, ast_id_trans=asset.ast_id,
+                    type_trans=kind, quantity_trans=Decimal(quantity),
+                    price_trans=Decimal('100.25'), fees_trans=Decimal('0.50'),
+                    currency_trans='USD', createdAt_trans=created_at,
+                ))
+            db.add_all(transactions)
+            await db.commit()
+            expected_ids = [transactions[i].id_trans for i in (2, 1, 0)]
+            bob_id = transactions[3].id_trans
+            active_id, paused_id = active.prt_id, paused.prt_id
+
+        # Client-supplied account IDs must not override the authenticated identity.
+        response = await self.client.get(path + '?uid=2&user_id=2', headers=self.headers())
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body['count'], 3)
+        self.assertEqual([item['id'] for item in body['transactions']], expected_ids)
+        self.assertEqual([item['portfolio_id'] for item in body['transactions']],
+                         [active_id, paused_id, active_id])
+        self.assertEqual([item['portfolio_name'] for item in body['transactions']],
+                         ['Active', 'Paused', 'Active'])
+        newest = body['transactions'][0]
+        self.assertEqual(newest['symbol'], 'AAPL')
+        self.assertEqual(newest['name'], 'Apple')
+        self.assertEqual(newest['type'], 'buy')
+        self.assertEqual(newest['quantity'], 3)
+        self.assertEqual(newest['price'], 100.25)
+        self.assertEqual(newest['amount'], 300.75)
+        self.assertEqual(newest['fees'], 0.5)
+        self.assertEqual(newest['currency'], 'USD')
+        self.assertIn('created_at', newest)
+
+        response = await self.client.get(path, headers=self.headers('bob'))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['count'], 1)
+        self.assertEqual(response.json()['transactions'][0]['id'], bob_id)
+
+    async def test_user_transactions_require_a_valid_active_account_token(self):
+        for headers, expected in [({}, 403), ({'Authorization': 'Bearer invalid'}, 401),
+                                  (self.headers(exp=int(time.time()) - 1), 401),
+                                  (self.headers('disabled'), 401)]:
+            with self.subTest(expected=expected, headers=headers):
+                response = await self.client.get('/api/users/me/transactions', headers=headers)
+                self.assertEqual(response.status_code, expected, response.text)
