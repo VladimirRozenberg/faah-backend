@@ -923,8 +923,9 @@ async def read_user_deposits(
     count = await db.scalar(
         select(func.count(Deposit.dep_id)).where(Deposit.dep_usr_id == user_id)
     ) or 0
-    deposits = await db.scalars(
-        select(Deposit)
+    deposits = await db.execute(
+        select(Deposit, User.usr_username)
+        .join(User, User.usr_id == Deposit.dep_admin_usr_id)
         .where(Deposit.dep_usr_id == user_id)
         .order_by(Deposit.dep_created_at.desc(), Deposit.dep_id.desc())
         .offset((page - 1) * page_size)
@@ -939,7 +940,8 @@ async def read_user_deposits(
             amount=float(item.dep_amount),
             currency=item.dep_currency,
             created_at=item.dep_created_at,
-        ) for item in deposits],
+            added_by=admin_username,
+        ) for item, admin_username in deposits.all()],
     )
 
 

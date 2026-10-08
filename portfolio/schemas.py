@@ -131,6 +131,7 @@ class DepositResponse(BaseModel):
     amount: float
     currency: str
     created_at: datetime
+    added_by: str
 
 
 class UserDepositListResponse(BaseModel):

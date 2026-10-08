@@ -94,10 +94,11 @@ Deposits are not included in `/api/users/me/transactions`, which lists buys and 
 
 For deposit history, call `GET /api/users/me/deposits?page=1` with the user's bearer
 token. It returns `{"count": ..., "page": 1, "page_size": 10, "total_pages": ..., "deposits": [...]}`.
-Each deposit has `id`, `amount`, `currency`, and `created_at`. Pages start at 1
+Each deposit has `id`, `amount`, `currency`, `created_at`, and `added_by` (the
+acting admin's current username, for an "Added by" line). Pages start at 1
 and have a fixed size of 10. `count` is the total number of owned deposits;
-out-of-range pages return an empty list. The acting admin is stored for auditing
-and is not returned in the user's history.
+out-of-range pages return an empty list. The acting admin's ID is stored for auditing;
+the history returns their username without exposing their email or other account details.
 
 Before deploying this update to an existing database, apply:
 

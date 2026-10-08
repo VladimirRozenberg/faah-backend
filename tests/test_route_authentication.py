@@ -164,7 +164,8 @@ class RouteAuthenticationTests(unittest.IsolatedAsyncioTestCase):
         item = response.json()['deposits'][0]
         self.assertEqual(item['amount'], 10)
         self.assertEqual(item['currency'], 'USD')
-        self.assertEqual(set(item), {'id', 'amount', 'currency', 'created_at'})
+        self.assertEqual(item['added_by'], 'admin')
+        self.assertEqual(set(item), {'id', 'amount', 'currency', 'created_at', 'added_by'})
         response = await self.client.get('/api/users/me/deposits', headers=self.headers('admin'))
         self.assertEqual(response.json()['count'], 0)
 
@@ -304,6 +305,7 @@ class RouteAuthenticationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(body['page_size'], 10)
             self.assertEqual(body['total_pages'], 3)
             self.assertEqual(len(body['deposits']), expected_length)
+            self.assertTrue(all(item['added_by'] == 'admin' for item in body['deposits']))
             actual_ids.extend(item['id'] for item in body['deposits'])
         self.assertEqual(actual_ids, expected_ids)
         response = await self.client.get(path, headers=self.headers('bob'))
