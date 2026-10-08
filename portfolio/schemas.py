@@ -132,9 +132,12 @@ class UserTransactionResponse(TransactionResponse):
 
 
 class UserTransactionListResponse(BaseModel):
-    """All transactions across the authenticated user's portfolios."""
+    """A page of transactions across the authenticated user's portfolios."""
 
     count: int
+    page: int
+    page_size: Literal[10] = 10
+    total_pages: int
     transactions: list[UserTransactionResponse]
 
 

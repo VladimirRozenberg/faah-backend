@@ -810,16 +810,25 @@ def _transaction_response(transaction: Transaction, asset: Asset) -> Transaction
 async def read_user_transactions(
     db: AsyncSession,
     user_id: int,
+    page: int = 1,
 ) -> UserTransactionListResponse:
-    """Read all owned transaction history without creating a default portfolio."""
+    """Read ten owned transactions per page without creating a portfolio."""
 
     await get_active_account(db, user_id)
+    page_size = 10
+    count = await db.scalar(
+        select(func.count(Transaction.id_trans))
+        .join(Portfolio, Portfolio.prt_id == Transaction.prt_id_trans)
+        .where(Portfolio.prt_usr_id == user_id)
+    ) or 0
     rows = await db.execute(
         select(Transaction, Asset, Portfolio)
         .join(Asset, Asset.ast_id == Transaction.ast_id_trans)
         .join(Portfolio, Portfolio.prt_id == Transaction.prt_id_trans)
         .where(Portfolio.prt_usr_id == user_id)
         .order_by(Transaction.createdAt_trans.desc(), Transaction.id_trans.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     )
     transactions = [
         UserTransactionResponse(
@@ -829,7 +838,13 @@ async def read_user_transactions(
         )
         for transaction, asset, portfolio in rows.all()
     ]
-    return UserTransactionListResponse(count=len(transactions), transactions=transactions)
+    return UserTransactionListResponse(
+        count=count,
+        page=page,
+        page_size=page_size,
+        total_pages=(count + page_size - 1) // page_size,
+        transactions=transactions,
+    )
 
 
 async def read_transactions(

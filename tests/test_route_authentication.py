@@ -162,7 +162,8 @@ class RouteAuthenticationTests(unittest.IsolatedAsyncioTestCase):
         path = '/api/users/me/transactions'
         response = await self.client.get(path, headers=self.headers())
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json(), {'count': 0, 'transactions': []})
+        self.assertEqual(response.json(), {'count': 0, 'page': 1, 'page_size': 10,
+                                           'total_pages': 0, 'transactions': []})
 
         async with self.sessions() as db:
             asset = Asset(ast_symbol='AAPL', ast_name='Apple', ast_type='stock')
@@ -215,6 +216,47 @@ class RouteAuthenticationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()['count'], 1)
         self.assertEqual(response.json()['transactions'][0]['id'], bob_id)
+
+    async def test_user_transactions_paginate_ten_items_with_total_count_and_stable_order(self):
+        async with self.sessions() as db:
+            asset = Asset(ast_symbol='MSFT', ast_name='Microsoft', ast_type='stock')
+            portfolios = [Portfolio(prt_usr_id=self.user_ids['alice'], prt_name=name)
+                          for name in ('First', 'Second')]
+            db.add_all([asset, *portfolios])
+            await db.flush()
+            now = datetime.now(timezone.utc)
+            transactions = [Transaction(
+                prt_id_trans=portfolios[index % 2].prt_id, ast_id_trans=asset.ast_id,
+                type_trans='buy', quantity_trans=Decimal('1'), price_trans=Decimal('10'),
+                createdAt_trans=now,
+            ) for index in range(23)]
+            db.add_all(transactions)
+            db.add(Transaction(
+                prt_id_trans=self.other_portfolio_id, ast_id_trans=asset.ast_id,
+                type_trans='buy', quantity_trans=Decimal('1'), price_trans=Decimal('10'),
+                createdAt_trans=now + timedelta(days=1),
+            ))
+            await db.commit()
+            expected_ids = sorted((item.id_trans for item in transactions), reverse=True)
+
+        path = '/api/users/me/transactions'
+        actual_ids = []
+        for page, expected_length in [(1, 10), (2, 10), (3, 3), (4, 0)]:
+            query = '' if page == 1 else f'?page={page}'
+            response = await self.client.get(path + query, headers=self.headers())
+            self.assertEqual(response.status_code, 200, response.text)
+            body = response.json()
+            self.assertEqual(body['count'], 23)
+            self.assertEqual(body['page'], page)
+            self.assertEqual(body['page_size'], 10)
+            self.assertEqual(body['total_pages'], 3)
+            self.assertEqual(len(body['transactions']), expected_length)
+            actual_ids.extend(item['id'] for item in body['transactions'])
+        self.assertEqual(actual_ids, expected_ids)
+
+        for page in ('0', '-1', 'abc'):
+            response = await self.client.get(path + f'?page={page}', headers=self.headers())
+            self.assertEqual(response.status_code, 422, response.text)
 
     async def test_user_transactions_require_a_valid_active_account_token(self):
         for headers, expected in [({}, 403), ({'Authorization': 'Bearer invalid'}, 401),

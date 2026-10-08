@@ -39,11 +39,14 @@ Related personal routes follow the same rule:
 `/api/users/me/portfolio/transactions`, as well as portfolio `/strategist` and
 `/strategist/reviews` (GET/POST).
 
-`GET /api/users/me/transactions` returns `{"count": ..., "transactions": [...]}`
-without pagination. Each item has the existing transaction fields (`id`, `symbol`,
+`GET /api/users/me/transactions?page=1` returns
+`{"count": ..., "page": 1, "page_size": 10, "total_pages": ..., "transactions": [...]}`.
+Pages start at 1 (the default), with a fixed size of 10. `count` is the total
+number of owned transactions, not the page length. Pages beyond the last return
+an empty list while retaining the total count. Each item has the existing transaction fields (`id`, `symbol`,
 `name`, `type`, `quantity`, `price`, `fees`, `currency`, `amount`, `created_at`) plus
 `portfolio_id` and `portfolio_name`. It includes history from paused portfolios.
-Users with no transactions receive `{"count": 0, "transactions": []}`.
+Users with no transactions receive `count: 0`, `total_pages: 0`, and an empty list.
 
 ## Shared routes requiring a valid token
 

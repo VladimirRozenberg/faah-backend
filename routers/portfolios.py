@@ -645,11 +645,12 @@ async def sell_portfolio_asset_by_id(
 async def get_user_transactions(
     user: CurrentUser,
     db: DbSession,
+    page: int = Query(default=1, ge=1),
 ) -> UserTransactionListResponse:
-    """Return every transaction across the authenticated user's portfolios."""
+    """Return ten transactions per page across the authenticated user's portfolios."""
 
     try:
-        return await read_user_transactions(db, user.user_id)
+        return await read_user_transactions(db, user.user_id, page)
     except LookupError as error:
         raise create_http_error(error) from error
 
