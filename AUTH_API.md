@@ -94,6 +94,16 @@ Invalid passwords return 422 and leave the existing password unchanged.
 | GET | `/api/data-sources/{id}` |
 | GET | `/api/orchestrator/decisions` |
 
+`GET /api/data-sources/{id}` includes a top-level `signals` array containing the
+trading signals from the article's related analyses, including analyses that use
+it as a supporting source. Each signal includes `sig_id` (signal ID),
+`sig_anl_id` (analysis ID), `sig_ast_id` (asset ID), `asset_symbol`, `asset_name`,
+`asset_type`, action, confidence, price levels, status, and timestamps. Display
+the asset symbol/name in the UI and use `sig_ast_id` for asset references.
+Signals also remain
+available inside `analyses[].signals`; `overview.signal_count` counts the same
+signals. An article without signals returns `signals: []`.
+
 Favorites already use the token's account ID. POST is now supported alongside the
 existing PUT for adding a favorite, matching the reported client call.
 
