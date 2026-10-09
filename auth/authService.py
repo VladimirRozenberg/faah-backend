@@ -5,7 +5,7 @@ import time
 
 import bcrypt
 import jwt
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 import models
@@ -68,8 +68,8 @@ class AuthService:
         identifier = username.strip().lower()
         query = select(models.User).where(
             or_(
-                models.User.usr_username == identifier,
-                models.User.usr_email == identifier,
+                func.lower(models.User.usr_username) == identifier,
+                func.lower(models.User.usr_email) == identifier,
             )
         )
         result = await db.execute(query)
@@ -87,8 +87,9 @@ class AuthService:
     async def register(self, username: str, email: str, password: str, db) -> TokenResponse:
         """Crée un nouveau compte utilisateur et retourne un token d'accès."""
 
-        clean_username = username.strip().lower()
-        clean_email = email.strip().lower()
+        clean_username = username.strip()
+        clean_email = email.strip()
+        await self.ensure_identifiers_available(clean_username, clean_email, db)
         hashed_password = self._hash_password(password)
 
         try:
@@ -107,6 +108,17 @@ class AuthService:
             raise UsernameTakenError() from error
 
         return TokenResponse(token=token, message=f"Welcome {clean_username} to FAAH!")
+
+    async def ensure_identifiers_available(self, username: str, email: str, db) -> None:
+        query = select(models.User.usr_id).where(
+            or_(
+                func.lower(models.User.usr_username) == username.lower(),
+                func.lower(models.User.usr_email) == email.lower(),
+            )
+        ).limit(1)
+        result = await db.execute(query)
+        if result.scalar_one_or_none() is not None:
+            raise UsernameTakenError()
 
     async def update_password(self, user_id: int, new_password: str, db) -> None:
         """Met à jour le mot de passe d'un utilisateur."""

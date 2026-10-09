@@ -52,8 +52,9 @@ class AdminService:
     async def create_user(self, username: str, email: str, password: str, role: str, db) -> TokenResponse:
         """Crée un utilisateur avec un rôle défini par l'admin (employe ou admin)."""
 
-        clean_username = username.strip().lower()
-        clean_email = email.strip().lower()
+        clean_username = username.strip()
+        clean_email = email.strip()
+        await auth_service.ensure_identifiers_available(clean_username, clean_email, db)
         hashed_password = auth_service._hash_password(password)
 
         try:
@@ -83,4 +84,3 @@ class AdminService:
 
 
 admin_service = AdminService()
-

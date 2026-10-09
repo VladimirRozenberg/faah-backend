@@ -4,6 +4,13 @@ New access tokens expire after **4 hours (240 minutes)**. Existing tokens retain
 encoded when they were issued. There is no refresh-token endpoint; clients must
 sign in again when the token expires.
 
+Usernames keep the casing entered when the account is created (with surrounding
+whitespace removed). Login accepts usernames and emails regardless of case.
+Registration and admin account creation reject case-only duplicates.
+For existing databases, apply
+`migrations/20261009_case_insensitive_user_identifiers.sql` to enforce this
+uniqueness for concurrent account creation as well.
+
 Send `Authorization: Bearer <token>` to every protected endpoint below. Login
 (`POST /auth/login`) stays public so a client can obtain its first token.
 Missing bearer credentials return 403 with the existing HTTPBearer behavior;

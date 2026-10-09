@@ -14,15 +14,14 @@ from pydantic import (
 
 # Règles pour le nom d'utilisateur :
 # - 3 à 30 caractères
-# - lettres minuscules, chiffres, point, tiret et underscore seulement
+# - lettres, chiffres, point, tiret et underscore seulement
 Username = Annotated[
     str,
     StringConstraints(
         strip_whitespace=True,
-        to_lower=True,
         min_length=3,
         max_length=30,
-        pattern=r"^[a-z0-9._-]+$",
+        pattern=r"^[A-Za-z0-9._-]+$",
     ),
 ]
 

@@ -50,6 +50,11 @@ class User(Base):
         nullable=False,
     )
 
+    __table_args__ = (
+        Index("users_username_lower_unique", func.lower(usr_username), unique=True),
+        Index("users_email_lower_unique", func.lower(usr_email), unique=True),
+    )
+
     usr_password_hash: Mapped[str] = mapped_column(
         String,
         nullable=False,
