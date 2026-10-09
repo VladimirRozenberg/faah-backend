@@ -16,6 +16,10 @@ LIVE_WORKER_STATUS_KEY = "market:worker:status"
 LIVE_WORKER_STATUS_TTL_SECONDS = 60
 HISTORICAL_FALLBACK_TTL_SECONDS = 15 * 60
 HISTORICAL_FALLBACK_KEY_PREFIX = "market:fallback-attempt:v2:"
+# [IA-10] Partie technique avec l'aide de l'IA : ces scripts Lua s’exécutent directement dans Redis, sans interruption.
+# Ils lisent le cours présent, gardent le prix le plus pertinent et fusionnent les champs.
+# Cela évite qu’une écriture concurrente arrive entre la lecture et la sauvegarde.
+# Les timestamps sont comparés comme du texte : un format de date cohérent est nécessaire.
 MERGE_QUOTE_FIELDS_SCRIPT = """
 local incoming = cjson.decode(ARGV[1])
 local current_json = redis.call('GET', KEYS[1])

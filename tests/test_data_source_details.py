@@ -83,6 +83,7 @@ class DataSourceDetailsTests(unittest.TestCase):
                             {
                                 "sig_id": 31,
                                 "sig_anl_id": 21,
+                                "sig_ast_id": 5,
                                 "asset_symbol": "NVDA",
                                 "sig_action": "hold",
                             }
@@ -123,8 +124,26 @@ class DataSourceDetailsTests(unittest.TestCase):
             ["classification_result", "supporting_source"],
         )
         self.assertEqual(analysis["signals"][0]["sig_action"], "hold")
+        self.assertEqual(result["signals"], analysis["signals"])
+        self.assertEqual(result["signals"][0]["sig_anl_id"], 21)
+        self.assertEqual(result["signals"][0]["sig_ast_id"], 5)
+        self.assertEqual(result["signals"][0]["asset_symbol"], "NVDA")
         self.assertTrue(analysis["supporting_sources"][0]["is_requested_source"])
         self.assertEqual(analysis["input_analysis_ids"], [9])
+
+    def test_source_without_analyses_returns_empty_signals(self):
+        db = SimpleNamespace(execute=AsyncMock(side_effect=[
+            FakeResult(rows=[{"src_id": 7, "src_title": "Unprocessed news"}]),
+            FakeResult(),
+            FakeResult(),
+            FakeResult(),
+        ]))
+
+        result = asyncio.run(get_data_source_details(7, db))
+
+        self.assertEqual(result["signals"], [])
+        self.assertEqual(result["analyses"], [])
+        self.assertEqual(result["overview"]["signal_count"], 0)
 
 
 if __name__ == "__main__":

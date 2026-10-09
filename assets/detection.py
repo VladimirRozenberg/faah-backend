@@ -123,6 +123,7 @@ async def get_classification_niche_context(
         return "No niche was selected for this classification."
 
     niche_ids = [niche.nic_id for niche in niches]
+    # Un join classique sur Stock éliminerait les cryptos, devises et futures.
     # outerjoin conserve aussi les actifs qui ne sont pas des actions
     # (crypto, forex, futures) : ils n'ont pas de fiche dans stocks.
     asset_query = (
@@ -214,6 +215,7 @@ async def detect_and_save_assets(
         "You identify Yahoo Finance asset symbols using only the supplied "
         "context. Do not perform web research."
     )
+    # Conserver le prompt exact permet de retrouver le contexte de cette détection.
     db_prompt = await record_prompt(
         db,
         name="Source asset detection",

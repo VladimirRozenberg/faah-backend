@@ -253,7 +253,7 @@ async def list_data_sources(
 
 @router.get("/data-sources/{source_id}")
 async def get_data_source_details(source_id: int, db: DbSession) -> dict:
-    """Return the complete classification and analysis story for one item."""
+    """Return the source, classifications, analyses and related trading signals."""
 
     source_result = await db.execute(
         select(*DataSource.__table__.c).where(DataSource.src_id == source_id)
@@ -456,13 +456,13 @@ async def get_data_source_details(source_id: int, db: DbSession) -> dict:
         analysis["supporting_sources"] = sources_by_analysis[analysis_id]
         analysis["input_analysis_ids"] = inputs_by_analysis[analysis_id]
 
-    signal_count = sum(len(item["signals"]) for item in analyses)
+    signals = [signal for analysis in analyses for signal in analysis["signals"]]
     return {
         "source": dict(source),
         "overview": {
             "classification_count": len(classifications),
             "analysis_count": len(analyses),
-            "signal_count": signal_count,
+            "signal_count": len(signals),
             "detected_asset_count": len(
                 {
                     asset["ast_id"]
@@ -473,4 +473,5 @@ async def get_data_source_details(source_id: int, db: DbSession) -> dict:
         },
         "classifications": classifications,
         "analyses": analyses,
+        "signals": signals,
     }

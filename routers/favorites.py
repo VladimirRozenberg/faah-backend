@@ -21,6 +21,8 @@ async def list_favorites(user: CurrentUser, db: DbSession) -> dict:
 async def add_favorite(asset_id: int, user: CurrentUser, db: DbSession) -> Response:
     if await db.get(Asset, asset_id) is None:
         raise HTTPException(status_code=404, detail="Actif introuvable.")
+    # [IA-21] Partie technique avec l'aide de l'IA : PostgreSQL vérifie l’unicité du couple utilisateur/actif.
+    # on_conflict_do_nothing ignore le doublon, même si deux ajouts arrivent ensemble.
     await db.execute(insert(Favorite).values(
         fav_usr_id=user.user_id, fav_ast_id=asset_id
     ).on_conflict_do_nothing(index_elements=["fav_usr_id", "fav_ast_id"]))
