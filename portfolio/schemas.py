@@ -36,8 +36,8 @@ class PortfolioCreateRequest(BaseModel):
     risk_tolerance: Literal["low", "medium", "high"] = "medium"
     max_position_size_pct: float = Field(default=5.0, gt=0, le=100)
     max_open_positions: int = Field(default=10, ge=1, le=1_000)
-    # V1 supports USD only. Keeping the field makes future currency expansion
-    # backward compatible without suggesting that FX conversion exists today.
+    # Le portefeuille reste en USD ; un cours coté dans une autre devise
+    # est converti côté serveur avant les calculs et les opérations.
     base_currency: Literal["USD"] = "USD"
 
     @field_validator("preferred_asset_types", "preferred_niche_ids")

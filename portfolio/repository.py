@@ -198,6 +198,9 @@ async def update_user_portfolio(
 
     await get_active_account(db, user_id)
     portfolio = await get_user_portfolio(db, user_id, portfolio_id)
+    # [IA-12] Partie technique avec l'aide de l'IA : exclude_unset distingue un champ absent d’un champ fourni.
+    # Pour les préférences, [] signifie effacer la liste ; un champ absent la conserve.
+    # Les anciennes associations sont remplacées avant le commit final.
     updates = data.model_dump(exclude_unset=True)
 
     niche_ids = updates.get("preferred_niche_ids")
@@ -417,6 +420,9 @@ async def read_user_asset_value(
         )
     ).all()
 
+    # [IA-13] Partie technique avec l'aide de l'IA : un même actif peut être détenu dans plusieurs portefeuilles.
+    # On additionne ses quantités et coûts, puis on demande un prix par actif.
+    # gather attend les recherches de prix lancées ensemble ; un prix manquant invalide le total.
     aggregated: dict[int, dict] = {}
     for position, asset in rows:
         entry = aggregated.setdefault(
@@ -531,6 +537,7 @@ async def save_portfolio_transaction(
     portfolio.prt_updated_at = datetime.now()
 
     # La position a été modifiée dans buy_asset ou sell_asset.
+    # Le solde du compte a également été débité ou crédité dans la même session.
     # Ce commit valide ensemble cette modification et la ligne d'historique.
     await db.commit()
     return await build_portfolio_response(db, portfolio)
@@ -572,6 +579,9 @@ async def buy_asset(
     # Decimal conserve des calculs décimaux pour les montants enregistrés.
     # La conversion par str évite de reprendre les approximations d'un float.
     quantity = Decimal(str(data.quantity))
+    # [IA-14] Partie technique avec l'aide de l'IA : le prix exécuté vient du serveur et est converti en USD.
+    # Le champ purchase_price reçu du client n’est pas utilisé pour débiter le compte.
+    # Le solde, la position et l’historique seront validés ensemble dans save_portfolio_transaction.
     price = await execution_price(asset)
     amount = quantity * price
     if amount > account.usr_balance:
@@ -883,6 +893,9 @@ async def read_transactions(
         for transaction, asset in result.all()
     ]
 
+    # [IA-16] Partie technique avec l'aide de l'IA : ce résumé porte sur tout l’historique, pas seulement la page affichée.
+    # GROUP BY rassemble les opérations par actif ; CASE vaut 1 pour le type recherché.
+    # SUM additionne ces 1 pour obtenir le nombre d’achats ou de ventes.
     grouped = await db.execute(
         select(Asset.ast_id, Asset.ast_symbol, Asset.ast_name,
                func.count(Transaction.id_trans).label("transaction_count"),
@@ -972,6 +985,9 @@ async def deposit_cash(
     admin_user_id: int,
 ):
     """Commit the deposit audit record and balance increase together."""
+    # [IA-15] Partie technique avec l'aide de l'IA : with_for_update verrouille le compte pendant ce dépôt.
+    # Le verrou est conservé jusqu’au commit ou rollback de la transaction.
+    # Le solde et la ligne de dépôt sont ainsi enregistrés ensemble.
     account = await db.scalar(
         select(User).where(User.usr_id == user_id).with_for_update()
     )

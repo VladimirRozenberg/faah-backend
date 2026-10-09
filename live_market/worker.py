@@ -85,6 +85,9 @@ async def refresh_stale_historical_quotes(runtime: WorkerRuntime) -> None:
             )
             now = datetime.now(timezone.utc)
             stale_before = now - timedelta(seconds=STALE_QUOTE_SECONDS)
+            # [IA-08] Partie technique avec l'aide de l'IA : on cherche les cours absents, trop anciens ou incomplets.
+            # Le secours Yahoo fournit des clôtures journalières, marquées source="daily".
+            # Le script Redis décide ensuite quels champs conserver si un cours live arrive.
             stale_symbols = []
             for symbol in symbols:
                 quote = cached_quotes.get(symbol)
@@ -314,6 +317,9 @@ async def stream_quotes(symbols: list[str], runtime: WorkerRuntime) -> None:
         connected_at = monotonic()
         await publish_worker_status(runtime)
 
+        # [IA-04] Partie technique avec l'aide de l'IA : une tâche vérifie les nouveaux actifs pendant que listen reçoit les cours.
+        # await laisse les autres tâches avancer pendant les attentes réseau.
+        # Le finally ci-dessous arrête cette tâche avant de fermer la connexion.
         update_task = asyncio.create_task(add_new_symbols(websocket, runtime))
 
         logger.info("Connected to yfinance for %d asset(s)", len(symbols))
@@ -354,6 +360,9 @@ async def stream_quotes(symbols: list[str], runtime: WorkerRuntime) -> None:
 async def listen_to_yfinance() -> None:
     """Relance l'écoute si elle se termine ou si aucun actif n'est disponible."""
 
+    # [IA-09] Partie technique avec l'aide de l'IA : ces tâches continuent pendant les attentes de la connexion Yahoo.
+    # Le heartbeat écrit un statut qui expire après 60 s sans renouvellement.
+    # Le délai de reconnexion augmente pour éviter de solliciter Yahoo sans pause.
     runtime = WorkerRuntime()
     heartbeat_task = asyncio.create_task(heartbeat_worker(runtime))
     historical_refresh_task = asyncio.create_task(

@@ -157,6 +157,9 @@ async def add_market_information(
             logger.exception("Cached market quote unavailable for %s", symbol)
             return None
 
+    # [IA-18] Partie technique avec l'aide de l'IA : gather attend plusieurs lectures Redis lancées ensemble.
+    # On associe ensuite les cours par symbole pour compléter la page.
+    # Aucun appel Yahoo ici : un cours absent reste absent dans cette réponse.
     quotes = await asyncio.gather(
         *(read_quote(asset.ast_symbol) for asset in assets)
     )
@@ -228,6 +231,9 @@ async def list_assets(
 ) -> AssetListResponse:
     """Filter the catalog before pagination and attach market data to this page."""
 
+    # [IA-17] Partie technique avec l'aide de l'IA : on filtre toute la liste en SQL avant de choisir la page.
+    # Les sous-requêtes évitent de répéter un actif appartenant à plusieurs niches.
+    # Le COUNT utilise les mêmes filtres ; CASE place les favoris de cet utilisateur en premier.
     filters = []
     term = search.strip()
     if term:
@@ -495,6 +501,8 @@ async def get_asset_news(
     """Actualités liées à l'actif par une classification enregistrée en base."""
     asset = await find_asset_or_404(db, symbol)
 
+    # [IA-19] Partie technique avec l'aide de l'IA : le lien est explicite : actif → classification → source.
+    # Une actualité peut avoir plusieurs classifications : DISTINCT supprime les doublons.
     # Suivre les liens en base, sans rechercher le nom de l'actif dans le texte.
     # DISTINCT évite les doublons si une actualité a plusieurs classifications.
     linked_sources = (

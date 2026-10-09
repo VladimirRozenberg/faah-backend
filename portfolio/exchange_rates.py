@@ -56,6 +56,9 @@ async def get_usd_rate(currency: str) -> UsdRate:
     if code == "USD":
         return UsdRate(scale, datetime.now(timezone.utc).date())
 
+    # [IA-11] Partie technique avec l'aide de l'IA : le taux est partagé en mémoire dans ce processus, pas dans Redis.
+    # Le facteur scale tient compte des sous-unités : 100 pence correspondent à 1 livre.
+    # monotonic mesure les délais du cache sans dépendre des changements d’heure.
     # Le verrou évite plusieurs requêtes identiques lors d'achats simultanés.
     async with _locks.setdefault(code, asyncio.Lock()):
         cached = _cache.get(code)

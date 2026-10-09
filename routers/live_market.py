@@ -87,6 +87,7 @@ async def market_websocket(
                 }
             )
 
+            # Cette fréquence concerne l’envoi à Avalonia, pas la réception Yahoo.
             await asyncio.sleep(3)
 
     except (WebSocketDisconnect, RuntimeError):

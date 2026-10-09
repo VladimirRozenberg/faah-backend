@@ -575,6 +575,9 @@ async def request_portfolio_strategist_review(
 
     user_id = user.user_id
 
+    # [IA-20] Partie technique avec l'aide de l'IA : on vérifie le propriétaire et verrouille la ligne du stratège.
+    # Si une analyse complète attend déjà ou est en cours, on réutilise sa demande.
+    # Le code 202 signifie « demande acceptée » ; le traitement IA se fait ensuite.
     strategist = await _owned_strategist(db, user_id, portfolio_id, lock=True)
     active_run = await db.scalar(
         select(PortfolioStrategistRun)

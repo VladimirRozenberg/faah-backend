@@ -51,6 +51,9 @@ async def download_logo(symbol: str, api_key: str) -> tuple[bytes, str] | None:
                 or address.username or address.password or address.port not in (None, 443)):
             return None
 
+        # [IA-07] Partie technique avec l'aide de l'IA : stream reçoit le fichier par morceaux, au lieu de tout charger immédiatement.
+        # On vérifie le format annoncé et la taille cumulée ; un refus retourne None.
+        # Les octets et le format seront ensuite enregistrés par fill_missing_logo.
         async with client.stream("GET", url) as image:
             image.raise_for_status()
             mime = image.headers.get("content-type", "").split(";")[0].strip().lower()

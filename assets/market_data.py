@@ -180,6 +180,7 @@ def get_latest_daily_quotes(symbols: list[str]) -> list[LiveQuote]:
         change_percent = (
             change / previous_close * 100 if previous_close != 0 else 0
         )
+        # Garder la date du cours Yahoo, pas celle du téléchargement : ce prix peut être ancien.
         timestamp = pd.Timestamp(closes.index[-1]).to_pydatetime()
         if timestamp.tzinfo is None:
             timestamp = timestamp.replace(tzinfo=timezone.utc)
