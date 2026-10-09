@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .authService import (
@@ -22,6 +22,11 @@ from schemas import (
 )
 
 from db import DbSession
+from .rate_limit import (
+    check_login_rate_limit,
+    clear_failed_logins,
+    register_failed_login,
+)
 
 # Toutes les routes de ce fichier commencent par /auth et sont regroupées
 # sous le titre « Authentification » dans la documentation Swagger.
@@ -61,14 +66,28 @@ CurrentUser = Annotated[UserResponse, Depends(get_current_user)]
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(data: LoginRequest, db: DbSession) -> TokenResponse:
+async def login(
+    data: LoginRequest,
+    request: Request,
+    db: DbSession,
+) -> TokenResponse:
     """Vérifie les identifiants et retourne un token d'accès."""
 
+    client_ip = request.client.host if request.client else "unknown"
+    key = f"{client_ip}:{data.username.strip().lower()}"
+    await check_login_rate_limit(key)
     try:
-        return await auth_service.login(data.username, data.password, db)
-    except Exception as error:
+        response = await auth_service.login(
+            data.username,
+            data.password,
+            db,
+        )
+        await clear_failed_logins(key)
+        return response
+    except InvalidCredentialsError as error:
+        await register_failed_login(key)
         raise_http_error(error)
-        raise  # Cette ligne aide uniquement l'analyse statique de Python.
+        raise
 
 
 @router.post("/user_create", response_model=TokenResponse)

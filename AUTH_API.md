@@ -71,9 +71,22 @@ transactions return `count` (total matching records), `page`, `page_size`, and
 history, not just the current page. The legacy singular
 `/api/users/me/portfolio/transactions` response remains unchanged.
 
-`PUT /auth/me/password` requires `new_password` to contain at least 8 characters
-and at least one digit (`0` through `9`), with the existing 72-byte maximum.
+Public registration, admin account creation, and `PUT /auth/me/password`
+require passwords to contain at least 8 characters and at most 72 UTF-8 bytes.
+Uppercase letters, digits, and special characters are not required.
 Invalid passwords return 422 and leave the existing password unchanged.
+
+Login passwords exceeding 72 UTF-8 bytes return 401 with
+`Incorrect username or password.` and count as a failed login.
+Malformed JWT account identifiers return 401 rather than a server error.
+
+Login failures are stored in Redis using `REDIS_URL`. After five failures for
+the same IP and normalized identifier within 300 seconds, subsequent attempts
+return 429 with `Too many login attempts. Please try again later.` Each failure
+expires individually, and a successful login clears the counter. Counters are
+shared between backend processes and survive backend restarts. If Redis is
+unavailable, login returns 503 with
+`Login temporarily unavailable. Please try again later.`
 
 ## Shared routes requiring a valid token
 

@@ -1,7 +1,7 @@
 """Routes HTTP réservées au super-administrateur."""
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, field_validator, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from decimal import Decimal
 from portfolio.repository import deposit_cash
 
@@ -9,7 +9,7 @@ from auth.login import CurrentUser
 from auth.authService import UsernameTakenError, UserNotFoundError
 from .adminService import SelfLockoutError, admin_service
 
-from schemas import TokenResponse, UserResponse
+from schemas import TokenResponse, UserResponse, Username, validate_password_length
 from db import DbSession
 
 # Toutes les routes de ce fichier commencent par /admin et sont regroupées
@@ -56,17 +56,22 @@ class RoleUpdate(BaseModel):
 
 
 class AdminCreateUserRequest(BaseModel):
-    username: str
-    email: str
+    username: Username
+    email: EmailStr
     password: str
     role: str = "employe"
 
     @field_validator("role")
     @classmethod
-    def role_valide(cls, v):
-        if v not in ("employe", "admin"):
+    def role_valide(cls, value: str) -> str:
+        if value not in ("employe", "admin"):
             raise ValueError("The role must be 'employe' or 'admin'.")
-        return v
+        return value
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        return validate_password_length(value)
 
 
 @router.get("/utilisateurs", response_model=list[UserResponse])

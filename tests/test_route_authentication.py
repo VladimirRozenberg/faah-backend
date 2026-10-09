@@ -4,7 +4,7 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import jwt
@@ -24,6 +24,11 @@ from routers import assets, data_sources, favorites, health, orchestrator, portf
 
 class RouteAuthenticationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        # These route tests isolate authentication from the external Redis service.
+        for name in ('check_login_rate_limit', 'register_failed_login', 'clear_failed_logins'):
+            limiter_patch = patch(f'auth.login.{name}', new_callable=AsyncMock)
+            limiter_patch.start()
+            self.addCleanup(limiter_patch.stop)
         self.key = 'test-signing-key-with-at-least-thirty-two-bytes'
         self.key_patch = patch('auth.authService.TOKEN_HEX_KEY', self.key)
         self.key_patch.start()
@@ -316,18 +321,19 @@ class RouteAuthenticationTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get(path, headers=self.headers('bob'))
         self.assertEqual(response.status_code, 404)
 
-    async def test_password_update_requires_eight_characters_and_a_digit(self):
+    async def test_password_update_requires_eight_characters_and_at_most_72_bytes(self):
         path = '/auth/me/password'
-        for password in ('abcdefg', 'abcdefgh', '1234567', 'é' * 36 + '1'):
+        for password in ('abcdefg', '1234567', 'a' * 73, 'é' * 36 + '1'):
             response = await self.client.put(path, headers=self.headers(), json={'new_password': password})
             self.assertEqual(response.status_code, 422, response.text)
         async with self.sessions() as db:
             user = await db.get(User, self.user_ids['alice'])
             self.assertTrue(auth_service._verify_password('password123', user.usr_password_hash))
-        response = await self.client.put(path, headers=self.headers(), json={'new_password': 'abcdefg1'})
-        self.assertEqual(response.status_code, 204, response.text)
-        response = await self.client.post('/auth/login', json={'username': 'alice', 'password': 'abcdefg1'})
-        self.assertEqual(response.status_code, 200, response.text)
+        for password in ('abcdefgh', 'a' * 72, 'é' * 36):
+            response = await self.client.put(path, headers=self.headers(), json={'new_password': password})
+            self.assertEqual(response.status_code, 204, response.text)
+            response = await self.client.post('/auth/login', json={'username': 'alice', 'password': password})
+            self.assertEqual(response.status_code, 200, response.text)
         response = await self.client.post('/auth/login', json={'username': 'alice', 'password': 'password123'})
         self.assertEqual(response.status_code, 401, response.text)
 

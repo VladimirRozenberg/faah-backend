@@ -48,7 +48,10 @@ class AuthService:
         return bcrypt.hashpw(password_bytes, salt).decode()
 
     def _verify_password(self, password_text: str, hashed_password: str) -> bool:
-        return bcrypt.checkpw(password_text.encode("utf-8"), hashed_password.encode("utf-8"))
+        password_bytes = password_text.encode("utf-8")
+        if len(password_bytes) > 72:
+            return False
+        return bcrypt.checkpw(password_bytes, hashed_password.encode("utf-8"))
 
     def _create_token(self, user_id: int, username: str) -> str:
         expire_timestamp = int(time.time()) + (ACCESS_TOKEN_EXPIRE_MINUTES * 60)
@@ -147,7 +150,14 @@ class AuthService:
         if user_id is None:
             raise TokenError("Malformed session token.")
 
-        query = select(models.User).where(models.User.usr_id == int(user_id))
+        try:
+            user_id = int(user_id)
+            if not 0 < user_id <= 2_147_483_647:
+                raise ValueError()
+        except (TypeError, ValueError, OverflowError) as error:
+            raise TokenError("Malformed session token.") from error
+
+        query = select(models.User).where(models.User.usr_id == user_id)
         result = await db.execute(query)
         user = result.scalar_one_or_none()
 

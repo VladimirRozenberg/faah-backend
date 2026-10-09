@@ -124,23 +124,38 @@ class LoginRequest(BaseModel):
     password: str
 
 
+def validate_password_length(value: str) -> str:
+    if len(value) < 8:
+        raise ValueError(
+            "Le mot de passe doit contenir au moins 8 caractères."
+        )
+
+    if len(value.encode("utf-8")) > 72:
+        raise ValueError(
+            "Le mot de passe ne doit pas dépasser 72 octets."
+        )
+
+    return value
+
+
 class RegisterRequest(BaseModel):
     username: Username
     email: EmailStr
     password: str
 
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        return validate_password_length(value)
+
 
 class UpdatePasswordRequest(BaseModel):
-    new_password: str = Field(min_length=8, max_length=72)
+    new_password: str
 
     @field_validator("new_password")
     @classmethod
-    def validate_password_bytes(cls, value: str) -> str:
-        if len(value.encode("utf-8")) > 72:
-            raise ValueError("Le mot de passe ne doit pas dépasser 72 octets.")
-        if not any(character in "0123456789" for character in value):
-            raise ValueError("Le mot de passe doit contenir au moins un chiffre.")
-        return value
+    def validate_password(cls, value: str) -> str:
+        return validate_password_length(value)
 
 
 class TokenResponse(BaseModel):
