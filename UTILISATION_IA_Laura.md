@@ -19,8 +19,8 @@ J’ai demandé une règle commune pour les trois opérations suivantes :
 - changement du mot de passe.
 Le mot de passe doit contenir au moins huit caractères.
 Il ne doit pas dépasser 72 octets une fois encodé en UTF-8.
-Aucune majuscule, aucun chiffre ni caractère spécial n’est obligatoire.
-J’ai demandé l’adaptation du test qui exigeait encore un chiffre.
+J’ai finalement demandé au moins un chiffre, sans majuscule ni caractère spécial obligatoire.
+J’ai demandé l’adaptation des tests à cette règle définitive.
 
 ## Validation de la création par un administrateur
 J’ai demandé de réutiliser les règles existantes du nom d’utilisateur.

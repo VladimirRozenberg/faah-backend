@@ -321,15 +321,15 @@ class RouteAuthenticationTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get(path, headers=self.headers('bob'))
         self.assertEqual(response.status_code, 404)
 
-    async def test_password_update_requires_eight_characters_and_at_most_72_bytes(self):
+    async def test_password_update_requires_eight_characters_a_digit_and_at_most_72_bytes(self):
         path = '/auth/me/password'
-        for password in ('abcdefg', '1234567', 'a' * 73, 'é' * 36 + '1'):
+        for password in ('abcdefg', 'abcdefgh', '1234567', 'a' * 72 + '1', 'é' * 36 + '1'):
             response = await self.client.put(path, headers=self.headers(), json={'new_password': password})
             self.assertEqual(response.status_code, 422, response.text)
         async with self.sessions() as db:
             user = await db.get(User, self.user_ids['alice'])
             self.assertTrue(auth_service._verify_password('password123', user.usr_password_hash))
-        for password in ('abcdefgh', 'a' * 72, 'é' * 36):
+        for password in ('abcdefg1', 'a' * 71 + '1', 'é' * 35 + 'a1'):
             response = await self.client.put(path, headers=self.headers(), json={'new_password': password})
             self.assertEqual(response.status_code, 204, response.text)
             response = await self.client.post('/auth/login', json={'username': 'alice', 'password': password})

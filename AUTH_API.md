@@ -72,9 +72,13 @@ history, not just the current page. The legacy singular
 `/api/users/me/portfolio/transactions` response remains unchanged.
 
 Public registration, admin account creation, and `PUT /auth/me/password`
-require passwords to contain at least 8 characters and at most 72 UTF-8 bytes.
-Uppercase letters, digits, and special characters are not required.
+require passwords to contain at least 8 characters, including at least one
+digit (including Unicode digits accepted by Python's `str.isdigit()`),
+and at most 72 UTF-8 bytes.
+Uppercase letters and special characters are not required.
 Invalid passwords return 422 and leave the existing password unchanged.
+The validation message is `Password must be at least 8 characters, include one
+digit, and use no more than 72 UTF-8 bytes.`
 
 Login passwords exceeding 72 UTF-8 bytes return 401 with
 `Incorrect username or password.` and count as a failed login.

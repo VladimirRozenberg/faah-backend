@@ -11,12 +11,41 @@ import jwt
 from fastapi import FastAPI, HTTPException
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError
+from pydantic import ValidationError
 
+from admin.gestion import AdminCreateUserRequest
 from auth.authService import InvalidCredentialsError, auth_service
 from auth.login import router
 from auth import rate_limit
 from db import get_db
-from schemas import TokenResponse
+from schemas import RegisterRequest, TokenResponse, UpdatePasswordRequest
+
+
+class PasswordValidationTests(unittest.TestCase):
+    def test_all_account_schemas_enforce_the_same_password_policy(self):
+        for model, field in ((RegisterRequest, 'password'),
+                             (AdminCreateUserRequest, 'password'),
+                             (UpdatePasswordRequest, 'new_password')):
+            base = {} if model is UpdatePasswordRequest else {
+                'username': 'Example', 'email': 'example@example.com',
+            }
+            for password in ('abcdefg1', 'abcdefg١', 'a' * 71 + '1', 'é' * 35 + 'a1'):
+                with self.subTest(model=model.__name__, password=password):
+                    self.assertEqual(getattr(model(**base, **{field: password}), field), password)
+            for password in (
+                'abcdef1',
+                'abcdefgh',
+                'a' * 72 + '1',
+                'é' * 36 + '1',
+            ):
+                with self.subTest(model=model.__name__, password=password):
+                    with self.assertRaises(ValidationError) as caught:
+                        model(**base, **{field: password})
+                    self.assertEqual(
+                        caught.exception.errors()[0]['msg'],
+                        'Value error, Password must be at least 8 characters, '
+                        'include one digit, and use no more than 72 UTF-8 bytes.',
+                    )
 
 
 class AuthSecurityTests(unittest.IsolatedAsyncioTestCase):

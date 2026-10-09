@@ -125,14 +125,14 @@ class LoginRequest(BaseModel):
 
 
 def validate_password_length(value: str) -> str:
-    if len(value) < 8:
+    if (
+        len(value) < 8
+        or len(value.encode("utf-8")) > 72
+        or not any(character.isdigit() for character in value)
+    ):
         raise ValueError(
-            "Le mot de passe doit contenir au moins 8 caractères."
-        )
-
-    if len(value.encode("utf-8")) > 72:
-        raise ValueError(
-            "Le mot de passe ne doit pas dépasser 72 octets."
+            "Password must be at least 8 characters, include one digit, "
+            "and use no more than 72 UTF-8 bytes."
         )
 
     return value
