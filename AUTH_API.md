@@ -1,6 +1,6 @@
 # Authentication changes
 
-New access tokens expire after **2 hours (120 minutes)**. Existing tokens retain the expiry
+New access tokens expire after **4 hours (240 minutes)**. Existing tokens retain the expiry
 encoded when they were issued. There is no refresh-token endpoint; clients must
 sign in again when the token expires.
 
@@ -136,7 +136,7 @@ frontend method/path changes must be applied in that project.
 ## Validation
 
 HTTP integration coverage checks all listed protected routes against missing,
-invalid, and expired tokens; login and its two-hour expiry; token-derived account
+invalid, and expired tokens; login and its four-hour expiry; token-derived account
 identity; rejection of another user's portfolio for reads, updates, trades, and
 strategist reviews; disabled accounts; and admin-only access with target-account
 deposits. Existing portfolio, asset-news, and orchestration tests use the updated

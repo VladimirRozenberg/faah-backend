@@ -98,13 +98,13 @@ class RouteAuthenticationTests(unittest.IsolatedAsyncioTestCase):
                     response = await self.client.request(method, path, headers=headers, json={})
                     self.assertEqual(response.status_code, expected, response.text)
 
-    async def test_login_is_public_and_issues_a_two_hour_token(self):
+    async def test_login_is_public_and_issues_a_four_hour_token(self):
         now = int(time.time())
         response = await self.client.post('/auth/login', json={'username': 'alice', 'password': 'password123'})
         self.assertEqual(response.status_code, 200, response.text)
         payload = jwt.decode(response.json()['token'], self.key, algorithms=['HS256'])
-        self.assertGreaterEqual(payload['exp'], now + 7200)
-        self.assertLessEqual(payload['exp'], int(time.time()) + 7200)
+        self.assertGreaterEqual(payload['exp'], now + 14400)
+        self.assertLessEqual(payload['exp'], int(time.time()) + 14400)
         self.assertEqual(payload['sub'], str(self.user_ids['alice']))
 
     async def test_personal_routes_take_identity_from_token_and_old_paths_are_removed(self):
