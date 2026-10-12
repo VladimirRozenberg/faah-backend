@@ -1,6 +1,6 @@
 """Logique métier réservée au super-administrateur (gestion des comptes)."""
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 import models
@@ -25,15 +25,35 @@ class AdminService:
         users = result.scalars().all()
         return [self._to_user_response(u) for u in users]
 
-    async def set_active(self, user_id: int, is_active: bool, admin_id: int, db) -> UserResponse:
-        """Active ou désactive un compte (suppression logique)."""
-
+    async def set_active(
+        self,
+        user_id: int,
+        is_active: bool,
+        admin_id: int,
+        db,
+    ) -> UserResponse:
         if user_id == admin_id and not is_active:
-            raise SelfLockoutError("You cannot disable your own account.")
+            raise SelfLockoutError(
+                "You cannot disable your own account."
+            )
 
         user = await self._get_user_or_raise(user_id, db)
-        user.usr_is_active = is_active
-        await db.commit()
+
+        try:
+            user.usr_is_active = is_active
+
+            if not is_active:
+                await db.execute(
+                    update(models.Portfolio)
+                    .where(models.Portfolio.prt_usr_id == user_id)
+                    .values(prt_is_active=False)
+                )
+
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+
         await db.refresh(user)
         return self._to_user_response(user)
 
