@@ -9,9 +9,11 @@ from typing import Protocol
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator_agent.schemas import BrainResult, CycleContext, CycleDecision
+from orchestrator_agent.context_limits import bounded_context
 
 
 DEFAULT_MODEL = "qwen3.8-flash"
+MAX_PROMPT_BYTES = 150_000
 
 SYSTEM_INSTRUCTIONS = """You are FAAH's supervisory market-research orchestrator.
 Review every new trading signal and all supplied historical analysis summaries for
@@ -22,9 +24,12 @@ follow-up analysis only where it can materially improve a decision.
 
 The follow_up_jobs field shows research previously requested from the analysis
 worker. Do not repeat a question while a matching job is pending or running.
-When a job succeeded, use its result_text and result_summary to resolve the
+When a job succeeded, use its result_summary to resolve the
 issue and request a new follow-up only if a distinct material uncertainty
 remains. Failed jobs may be retried only when the question is still important.
+Context is bounded: context_limits discloses omitted records and shortened text.
+Do not treat missing evidence as proof that no risk or opportunity exists.
+analysis_asset_ids lists additional asset links for each deduplicated summary.
 
 You may propose RSS controls only for feeds in allowed_rss_feeds. Poll faster for
 time-sensitive unresolved events, slower when a feed is low value, and do not
@@ -96,14 +101,17 @@ class LLMOrchestrationBrain:
         from prompt.llm_client import get_alibaba_client
         from prompt.recording import record_prompt
 
+        context = bounded_context(context)
         model_input = (
             "CYCLE CONTEXT\n"
-            f"{context.model_dump_json(indent=2)}\n\n"
+            f"{context.model_dump_json()}\n\n"
             f"{RSS_ACTION_CONTRACT}\n\n"
             f"{ORCHESTRATOR_SCHEDULE_CONTRACT}\n\n"
             "REQUIRED OUTPUT JSON SCHEMA\n"
             f"{json.dumps(CycleDecision.model_json_schema(), indent=2)}"
         )
+        if len((SYSTEM_INSTRUCTIONS + model_input).encode("utf-8")) > MAX_PROMPT_BYTES:
+            raise ValueError("Orchestrator prompt exceeds the bounded input budget")
         db_prompt = await record_prompt(
             self.db,
             name="Orchestrator cycle",

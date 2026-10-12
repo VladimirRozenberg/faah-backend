@@ -33,6 +33,19 @@ replays signals near a cycle boundary so a transaction committed around the
 cutoff cannot be missed. Persistent unresolved follow-ups are a separate state
 concern and are not solved by this overlap.
 
+Model inputs are bounded to prevent failed cycles from accumulating unlimited
+context. After a long outage, the signal window covers at most the latest 24
+hours; older signals remain in PostgreSQL. The database fetches at most 1,000
+recent signals and 600 analysis/asset rows from the latest 14 days. Model context
+retains at most 200 signals, 150 distinct analyses (up to three per primary
+asset), and 30 follow-up jobs, prioritizing active jobs and signal-source
+analyses. Shared analyses retain their asset links in `analysis_asset_ids`.
+Text excerpts replace long reports; full source records remain in PostgreSQL.
+The `context_limits` field discloses omissions and truncation. A 120 KB UTF-8
+context budget and 150 KB complete-prompt guard apply before prompt recording
+and the provider call. These limits may omit older evidence, so the model must
+not interpret absence from the context as absence of risk.
+
 The RSS action contract allows intervals from 300 seconds (5 minutes) through
 7,200 seconds (2 hours). Feeds do not accept ticker, query, category, URL or
 other arbitrary parameters.

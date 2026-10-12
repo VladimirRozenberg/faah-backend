@@ -1,9 +1,21 @@
 """Routes HTTP réservées au super-administrateur."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from decimal import Decimal
-from portfolio.repository import deposit_cash
+from portfolio.repository import (
+    deposit_cash,
+    read_user_available_cash,
+    read_user_asset_value,
+    read_user_transactions,
+    read_user_deposits,
+)
+from portfolio.schemas import (
+    UserAvailableCashResponse,
+    UserAssetValueResponse,
+    UserTransactionListResponse,
+    UserDepositListResponse,
+)
 
 from auth.login import CurrentUser
 from auth.authService import UsernameTakenError, UserNotFoundError
@@ -38,6 +50,52 @@ def get_current_admin(user: CurrentUser) -> UserResponse:
 
 
 AdminUser = Depends(get_current_admin)
+
+
+@router.get("/users/{user_id}/available-cash", response_model=UserAvailableCashResponse)
+async def get_user_available_cash(
+    user_id: int, db: DbSession, admin: UserResponse = AdminUser,
+) -> UserAvailableCashResponse:
+    """Return the selected account's available simulated USD cash."""
+    try:
+        return await read_user_available_cash(db, user_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@router.get("/users/{user_id}/asset-value", response_model=UserAssetValueResponse)
+async def get_user_asset_value(
+    user_id: int, db: DbSession, admin: UserResponse = AdminUser,
+) -> UserAssetValueResponse:
+    """Return the USD value of active holdings across the selected account's portfolios."""
+    try:
+        return await read_user_asset_value(db, user_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@router.get("/users/{user_id}/transactions", response_model=UserTransactionListResponse)
+async def get_user_transactions(
+    user_id: int, db: DbSession, admin: UserResponse = AdminUser,
+    page: int = Query(default=1, ge=1),
+) -> UserTransactionListResponse:
+    """Return ten transactions per page across the selected account's portfolios."""
+    try:
+        return await read_user_transactions(db, user_id, page)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@router.get("/users/{user_id}/deposits", response_model=UserDepositListResponse)
+async def get_user_deposits(
+    user_id: int, db: DbSession, admin: UserResponse = AdminUser,
+    page: int = Query(default=1, ge=1),
+) -> UserDepositListResponse:
+    """Return ten deposits per page for the selected account."""
+    try:
+        return await read_user_deposits(db, user_id, page)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 class StatutUpdate(BaseModel):

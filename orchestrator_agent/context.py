@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 from sqlalchemy import or_, select
@@ -53,7 +53,8 @@ class DatabaseContextProvider:
                     Signal.sig_created_at > start,
                     Signal.sig_created_at <= end,
                 )
-                .order_by(Signal.sig_created_at, Signal.sig_id)
+                .order_by(Signal.sig_created_at.desc(), Signal.sig_id.desc())
+                .limit(1_000)
             )
         ).all()
         return [
@@ -98,10 +99,12 @@ class DatabaseContextProvider:
                 .where(
                     Asset.ast_id.in_(asset_ids),
                     Analysis.anl_created_at <= end,
+                    Analysis.anl_created_at >= end - timedelta(days=14),
                     Analysis.anl_summary.is_not(None),
                 )
                 .distinct()
-                .order_by(Analysis.anl_created_at, Analysis.anl_id)
+                .order_by(Analysis.anl_created_at.desc(), Analysis.anl_id.desc())
+                .limit(600)
             )
         ).all()
         return [

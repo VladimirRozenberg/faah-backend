@@ -7,6 +7,7 @@ from typing import Protocol
 
 from orchestrator_agent.brain import OrchestrationBrain
 from orchestrator_agent.context import ContextProvider
+from orchestrator_agent.context_limits import bounded_context
 from orchestrator_agent.orchestrator import Orchestrator
 from orchestrator_agent.schemas import (
     AnalysisFollowUp,
@@ -74,6 +75,8 @@ class OrchestrationLoop:
             if state.last_cycle_at is not None
             else started_at - self.first_window
         )
+        original_window_start = window_start
+        window_start = max(window_start, started_at - timedelta(hours=24))
         previous = state.next_instructions or DEFAULT_FIRST_RUN_INSTRUCTIONS
 
         signals = await self.provider.recent_signals(window_start, started_at)
@@ -92,7 +95,7 @@ class OrchestrationLoop:
             if self.follow_up_repository is not None
             else []
         )
-        context = CycleContext(
+        context = bounded_context(CycleContext(
             started_at=started_at,
             signal_window_start=window_start,
             previous_instructions=previous,
@@ -101,7 +104,13 @@ class OrchestrationLoop:
             follow_up_jobs=follow_up_jobs,
             allowed_rss_feeds=sorted(self.orchestrator.policy.allowed_feeds),
             rss_feed_states=feed_states,
-        )
+            context_limits={
+                "signal_window_clipped": int(window_start != original_window_start),
+                "history_lookback_days": 14,
+                "history_query_limit": 600,
+                "signal_query_limit": 1_000,
+            },
+        ))
         brain_result = await self.brain.decide(context)
         decision = brain_result.decision
 

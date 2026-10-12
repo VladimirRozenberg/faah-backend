@@ -205,6 +205,8 @@ class CycleContext(BaseModel):
     follow_up_jobs: list[AnalysisFollowUpJobState] = Field(default_factory=list)
     allowed_rss_feeds: list[str] = Field(default_factory=list)
     rss_feed_states: list[RSSFeedState] = Field(default_factory=list)
+    context_limits: dict[str, int] = Field(default_factory=dict)
+    analysis_asset_ids: dict[int, list[int]] = Field(default_factory=dict)
 
 
 class CycleDecision(BaseModel):

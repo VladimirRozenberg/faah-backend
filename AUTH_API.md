@@ -138,6 +138,20 @@ acting administrator's ID comes from the token.
 | POST | `/admin/utilisateurs/{id}/deposit` |
 | POST | `/admin/utilisateurs` (create a user) |
 
+The account summary and history endpoints also have admin variants. They use
+the same response contracts as `/api/users/me/...`, with the target user ID in
+the path and an authenticated admin bearer token:
+
+| Method | Route |
+| --- | --- |
+| GET | `/admin/users/{user_id}/available-cash` |
+| GET | `/admin/users/{user_id}/asset-value` |
+| GET | `/admin/users/{user_id}/transactions?page=1` |
+| GET | `/admin/users/{user_id}/deposits?page=1` |
+
+Transactions and deposits retain fixed pages of 10 and require `page >= 1`.
+Missing or disabled target accounts return 404; non-admin callers return 403.
+
 To add simulated funds, use the existing
 `POST /admin/utilisateurs/{id}/deposit` with an admin bearer token and
 `{"amount": 100}`. It returns `{"balance": ..., "currency": "USD", "simulation": true}`.

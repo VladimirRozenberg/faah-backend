@@ -251,6 +251,17 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             "Check the regulatory follow-up before trusting ACME.",
         )
 
+    async def test_cycle_bounds_signal_window_after_long_outage(self):
+        now = datetime(2026, 10, 10, 12, tzinfo=timezone.utc)
+        brain = RecordingBrain()
+        loop = OrchestrationLoop(
+            self.agent, StaticContextProvider([], []), brain,
+        )
+        await loop.run_once(now - timedelta(days=3))
+        result = await loop.run_once(now)
+        self.assertEqual(result.context.signal_window_start, now - timedelta(hours=24))
+        self.assertEqual(result.context.context_limits["signal_window_clipped"], 1)
+
     async def test_service_retries_after_unexpected_error(self):
         now = datetime(2026, 9, 25, 12, tzinfo=timezone.utc)
         service_pass = AsyncMock(

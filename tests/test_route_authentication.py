@@ -17,7 +17,7 @@ from admin.gestion import router as admin_router
 from auth.authService import auth_service
 from auth.login import router as auth_router
 from db import Base, get_db
-from models import Asset, Deposit, Portfolio, PortfolioStrategist, Transaction, User
+from models import Asset, Deposit, Portfolio, PortfolioAsset, PortfolioStrategist, Transaction, User
 from portfolio.repository import deposit_cash
 from routers import assets, data_sources, favorites, health, orchestrator, portfolios
 
@@ -37,7 +37,8 @@ class RouteAuthenticationTests(unittest.IsolatedAsyncioTestCase):
         async with self.engine.begin() as connection:
             await connection.run_sync(lambda c: Base.metadata.create_all(
                 c, tables=[User.__table__, Asset.__table__, Portfolio.__table__,
-                           PortfolioStrategist.__table__, Transaction.__table__, Deposit.__table__],
+                           PortfolioAsset.__table__, PortfolioStrategist.__table__,
+                           Transaction.__table__, Deposit.__table__],
             ))
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
         async with self.sessions() as db:
@@ -174,6 +175,29 @@ class RouteAuthenticationTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get('/api/users/me/deposits', headers=self.headers('admin'))
         self.assertEqual(response.json()['count'], 0)
 
+    async def test_admin_account_reads_match_personal_contracts_and_target_selected_user(self):
+        for endpoint in ('available-cash', 'asset-value', 'transactions', 'deposits'):
+            path = f"/admin/users/{self.user_ids['bob']}/{endpoint}"
+            response = await self.client.get(path, headers=self.headers('admin'))
+            personal = await self.client.get(f'/api/users/me/{endpoint}', headers=self.headers('bob'))
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json(), personal.json())
+            if endpoint in ('available-cash', 'asset-value'):
+                self.assertEqual(response.json()['user_id'], self.user_ids['bob'])
+            if endpoint == 'available-cash':
+                self.assertEqual(response.json()['available_cash'], 900)
+            for user_id in (999999, self.user_ids['disabled']):
+                response = await self.client.get(f'/admin/users/{user_id}/{endpoint}',
+                                                 headers=self.headers('admin'))
+                self.assertEqual(response.status_code, 404, response.text)
+            if endpoint in ('transactions', 'deposits'):
+                for page in ('0', '-1', 'abc'):
+                    response = await self.client.get(path + f'?page={page}', headers=self.headers('admin'))
+                    self.assertEqual(response.status_code, 422, response.text)
+            admin_contract = self.app.openapi()['paths']['/admin/users/{user_id}/' + endpoint]['get']
+            personal_contract = self.app.openapi()['paths']['/api/users/me/' + endpoint]['get']
+            self.assertEqual(admin_contract['responses']['200'], personal_contract['responses']['200'])
+
     async def test_valid_token_allows_shared_routes_and_disabled_account_is_rejected(self):
         response = await self.client.get('/api/history-options', headers=self.headers())
         self.assertEqual(response.status_code, 200)
@@ -273,6 +297,12 @@ class RouteAuthenticationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(body['page_size'], 10)
             self.assertEqual(body['total_pages'], 3)
             self.assertEqual(len(body['transactions']), expected_length)
+            admin_response = await self.client.get(
+                f"/admin/users/{self.user_ids['alice']}/transactions" + query,
+                headers=self.headers('admin'),
+            )
+            self.assertEqual(admin_response.status_code, 200, admin_response.text)
+            self.assertEqual(admin_response.json(), body)
             actual_ids.extend(item['id'] for item in body['transactions'])
         self.assertEqual(actual_ids, expected_ids)
 
@@ -367,6 +397,12 @@ class RouteAuthenticationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(body['page_size'], 10)
             self.assertEqual(body['total_pages'], 3)
             self.assertEqual(len(body['deposits']), expected_length)
+            admin_response = await self.client.get(
+                f"/admin/users/{self.user_ids['alice']}/deposits?page={page}",
+                headers=self.headers('admin'),
+            )
+            self.assertEqual(admin_response.status_code, 200, admin_response.text)
+            self.assertEqual(admin_response.json(), body)
             self.assertTrue(all(item['added_by'] == 'admin' for item in body['deposits']))
             actual_ids.extend(item['id'] for item in body['deposits'])
         self.assertEqual(actual_ids, expected_ids)
